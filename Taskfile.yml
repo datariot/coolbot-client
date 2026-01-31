@@ -1,0 +1,52 @@
+version: '3'
+
+vars:
+  BINARY: coolbot-exporter
+
+tasks:
+  default:
+    desc: Build the exporter
+    cmds:
+      - task: build
+
+  build:
+    desc: Build the binary
+    cmds:
+      - go build -o {{.BINARY}} ./cmd/coolbot-exporter
+
+  run:
+    desc: Build and run the exporter
+    deps: [build]
+    cmds:
+      - ./{{.BINARY}}
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v ./...
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -f {{.BINARY}}
+
+  deps:
+    desc: Tidy dependencies
+    cmds:
+      - go mod tidy
+
+  docker:
+    desc: Build Docker image
+    cmds:
+      - docker build -t coolbot-exporter .
+
+  lint:
+    desc: Run linter
+    cmds:
+      - golangci-lint run
+
+  dev:
+    desc: Run with debug logging
+    deps: [build]
+    cmds:
+      - ./{{.BINARY}} -log-level debug
