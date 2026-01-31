@@ -1,4 +1,4 @@
-// Command coolbot-exporter runs a Prometheus exporter for CoolBot Pro devices.
+// Command coolbot-exporter collects CoolBot Pro data and writes to InfluxDB.
 package main
 
 import (
@@ -6,14 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/datariot/coolbot-client/internal/client"
 	"github.com/datariot/coolbot-client/internal/metrics"
@@ -21,11 +17,20 @@ import (
 
 func main() {
 	var (
-		listenAddr = flag.String("listen", ":9120", "Address to listen on for metrics")
-		email      = flag.String("email", "", "CoolBot account email")
-		password   = flag.String("password", "", "CoolBot account password")
-		server     = flag.String("server", client.DefaultServer, "CoolBot server address")
-		logLevel   = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
+		// CoolBot credentials
+		email    = flag.String("email", "", "CoolBot account email")
+		password = flag.String("password", "", "CoolBot account password")
+		server   = flag.String("server", client.DefaultServer, "CoolBot server address")
+
+		// InfluxDB configuration
+		influxURL    = flag.String("influx-url", "http://minis:8086", "InfluxDB server URL")
+		influxToken  = flag.String("influx-token", "", "InfluxDB API token")
+		influxOrg    = flag.String("influx-org", "home", "InfluxDB organization")
+		influxBucket = flag.String("influx-bucket", "coolbot", "InfluxDB bucket")
+
+		// General options
+		interval = flag.Duration("interval", 15*time.Second, "Metrics write interval")
+		logLevel = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
 	)
 	flag.Parse()
 
@@ -36,10 +41,24 @@ func main() {
 	if *password == "" {
 		*password = os.Getenv("COOLBOT_PASSWORD")
 	}
+	if *influxToken == "" {
+		*influxToken = os.Getenv("INFLUXDB_TOKEN")
+	}
+	if *influxURL == "" || *influxURL == "http://minis:8086" {
+		if env := os.Getenv("INFLUXDB_URL"); env != "" {
+			*influxURL = env
+		}
+	}
 
 	if *email == "" || *password == "" {
-		fmt.Fprintln(os.Stderr, "Error: email and password are required")
+		fmt.Fprintln(os.Stderr, "Error: CoolBot email and password are required")
 		fmt.Fprintln(os.Stderr, "Set via flags or COOLBOT_EMAIL / COOLBOT_PASSWORD environment variables")
+		os.Exit(1)
+	}
+
+	if *influxToken == "" {
+		fmt.Fprintln(os.Stderr, "Error: InfluxDB token is required")
+		fmt.Fprintln(os.Stderr, "Set via -influx-token flag or INFLUXDB_TOKEN environment variable")
 		os.Exit(1)
 	}
 
@@ -56,20 +75,28 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 
-	// Create client
+	// Create InfluxDB writer
+	influxCfg := metrics.Config{
+		URL:    *influxURL,
+		Token:  *influxToken,
+		Org:    *influxOrg,
+		Bucket: *influxBucket,
+	}
+	writer := metrics.NewWriter(influxCfg, logger)
+	defer writer.Close()
+
+	// Test InfluxDB connection
+	ctx := context.Background()
+	if err := writer.Ping(ctx); err != nil {
+		logger.Error("failed to connect to InfluxDB", "error", err, "url", *influxURL)
+		os.Exit(1)
+	}
+
+	// Create CoolBot client
 	cb := client.New(*email, *password,
 		client.WithServer(*server),
 		client.WithLogger(logger),
 	)
-
-	// Register update callback for metrics
-	cb.OnUpdate(func(update client.DeviceUpdate) {
-		logger.Debug("device update",
-			"device_id", update.DeviceID,
-			"pin", update.PinName,
-			"value", update.Value,
-		)
-	})
 
 	// Set up context with signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -81,40 +108,16 @@ func main() {
 	// Connect to CoolBot
 	logger.Info("connecting to CoolBot", "server", *server, "email", *email)
 	if err := cb.Connect(ctx); err != nil {
-		logger.Error("failed to connect", "error", err)
+		logger.Error("failed to connect to CoolBot", "error", err)
 		os.Exit(1)
 	}
 	defer cb.Close()
 
-	// Initial metrics update
-	updateMetrics(cb)
+	// Initial metrics write
+	writeMetrics(ctx, cb, writer, logger)
 
-	// Start metrics HTTP server
-	http.Handle("/metrics", promhttp.Handler())
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`<html>
-<head><title>CoolBot Exporter</title></head>
-<body>
-<h1>CoolBot Exporter</h1>
-<p><a href="/metrics">Metrics</a></p>
-</body>
-</html>`))
-	})
-
-	httpServer := &http.Server{Addr: *listenAddr}
-	go func() {
-		logger.Info("starting metrics server", "addr", *listenAddr)
-		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			logger.Error("http server error", "error", err)
-		}
-	}()
-
-	// Start periodic metrics update
-	ticker := time.NewTicker(15 * time.Second)
+	// Start periodic metrics write
+	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 
 	// Start listening for real-time updates
@@ -124,43 +127,40 @@ func main() {
 		}
 	}()
 
+	logger.Info("started", "interval", *interval, "influx_url", *influxURL, "bucket", *influxBucket)
+
 	// Main loop
 	for {
 		select {
 		case <-ticker.C:
-			updateMetrics(cb)
+			writeMetrics(ctx, cb, writer, logger)
 		case sig := <-sigCh:
 			logger.Info("received signal, shutting down", "signal", sig)
 			cancel()
-
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer shutdownCancel()
-			httpServer.Shutdown(shutdownCtx)
 			return
 		}
 	}
 }
 
-func updateMetrics(cb *client.Client) {
+func writeMetrics(ctx context.Context, cb *client.Client, writer *metrics.Writer, logger *slog.Logger) {
 	devices := cb.GetDevices()
 	for _, dev := range devices {
-		deviceID := strconv.Itoa(dev.ID)
-		labels := []string{deviceID, dev.Name}
-
-		metrics.RoomTemperature.WithLabelValues(labels...).Set(dev.RoomTemp)
-		metrics.FrostTemperature.WithLabelValues(labels...).Set(dev.FrostTemp)
-		metrics.SetPointTemperature.WithLabelValues(labels...).Set(dev.SetPoint)
-		metrics.Humidity.WithLabelValues(labels...).Set(dev.Humidity)
-		metrics.CompressorState.WithLabelValues(labels...).Set(float64(dev.CompressorState))
-		metrics.RSSI.WithLabelValues(labels...).Set(float64(dev.RSSI))
-		metrics.LastUpdateTimestamp.WithLabelValues(labels...).Set(float64(dev.LastUpdate.Unix()))
-
-		online := 0.0
-		if dev.Status == "ONLINE" {
-			online = 1.0
+		m := metrics.DeviceMetrics{
+			DeviceID:        dev.ID,
+			DeviceName:      dev.Name,
+			RoomTemp:        dev.RoomTemp,
+			FrostTemp:       dev.FrostTemp,
+			SetPoint:        dev.SetPoint,
+			Humidity:        dev.Humidity,
+			CompressorState: dev.CompressorState,
+			RSSI:            dev.RSSI,
+			Online:          dev.Status == "ONLINE",
+			FirmwareVersion: dev.FirmwareVersion,
+			Status:          dev.Status,
 		}
-		metrics.DeviceOnline.WithLabelValues(labels...).Set(online)
 
-		metrics.DeviceInfo.WithLabelValues(deviceID, dev.Name, dev.FirmwareVersion, dev.Status).Set(1)
+		if err := writer.WriteDeviceMetrics(ctx, m); err != nil {
+			logger.Error("failed to write metrics", "error", err, "device", dev.Name)
+		}
 	}
 }

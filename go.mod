@@ -4,5 +4,5 @@ go 1.25
 
 require (
 	github.com/coder/websocket v1.8.12
-	github.com/prometheus/client_golang v1.20.5
+	github.com/influxdata/influxdb-client-go/v2 v2.14.0
 )

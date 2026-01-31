@@ -1,12 +1,12 @@
 # CoolBot Client
 
-A Go client library and Prometheus exporter for [CoolBot Pro](https://www.storeitcold.com/product/coolbot-pro/) temperature controllers.
+A Go client library for [CoolBot Pro](https://www.storeitcold.com/product/coolbot-pro/) temperature controllers that writes metrics to InfluxDB.
 
 ## Features
 
 - WebSocket client for CoolBot Pro's Blynk-based protocol
 - Real-time temperature and device status updates
-- Prometheus metrics exporter for Grafana integration
+- Direct InfluxDB integration for time-series storage
 - Support for multiple devices
 
 ## Installation
@@ -20,70 +20,90 @@ Or build from source:
 ```bash
 git clone https://github.com/datariot/coolbot-client.git
 cd coolbot-client
-go build -o coolbot-exporter ./cmd/coolbot-exporter
+task build
 ```
 
 ## Usage
 
-### Prometheus Exporter
-
 ```bash
 # Using flags
-coolbot-exporter -email user@example.com -password yourpassword
+coolbot-exporter \
+  -email user@example.com \
+  -password yourpassword \
+  -influx-url http://minis:8086 \
+  -influx-token your-influxdb-token \
+  -influx-org home \
+  -influx-bucket coolbot
 
 # Using environment variables
 export COOLBOT_EMAIL=user@example.com
 export COOLBOT_PASSWORD=yourpassword
+export INFLUXDB_TOKEN=your-influxdb-token
 coolbot-exporter
 ```
 
-Options:
-- `-listen`: Address to listen on (default: `:9120`)
-- `-email`: CoolBot account email
-- `-password`: CoolBot account password
-- `-server`: CoolBot server (default: `cb.storeitcold.com`)
-- `-log-level`: Log level - debug, info, warn, error (default: `info`)
+### Options
 
-### Prometheus Configuration
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `-email` | `COOLBOT_EMAIL` | - | CoolBot account email |
+| `-password` | `COOLBOT_PASSWORD` | - | CoolBot account password |
+| `-server` | - | `cb.storeitcold.com` | CoolBot server |
+| `-influx-url` | `INFLUXDB_URL` | `http://minis:8086` | InfluxDB server URL |
+| `-influx-token` | `INFLUXDB_TOKEN` | - | InfluxDB API token |
+| `-influx-org` | - | `home` | InfluxDB organization |
+| `-influx-bucket` | - | `coolbot` | InfluxDB bucket |
+| `-interval` | - | `15s` | Metrics write interval |
+| `-log-level` | - | `info` | Log level (debug, info, warn, error) |
 
-Add to your `prometheus.yml`:
+## InfluxDB Setup
 
-```yaml
-scrape_configs:
-  - job_name: 'coolbot'
-    static_configs:
-      - targets: ['localhost:9120']
-```
+1. Create a bucket named `coolbot` in your InfluxDB instance
+2. Generate an API token with write access to the bucket
+3. Run the exporter with your credentials
 
 ## Metrics
 
-| Metric | Description | Labels |
-|--------|-------------|--------|
-| `coolbot_room_temperature_fahrenheit` | Current room temperature | device_id, device_name |
-| `coolbot_frost_temperature_fahrenheit` | Frost/fin temperature | device_id, device_name |
-| `coolbot_set_point_fahrenheit` | Target set point | device_id, device_name |
-| `coolbot_humidity_percent` | Humidity percentage | device_id, device_name |
-| `coolbot_compressor_state` | Compressor on/off | device_id, device_name |
-| `coolbot_wifi_rssi_dbm` | WiFi signal strength | device_id, device_name |
-| `coolbot_device_online` | Device online status | device_id, device_name |
-| `coolbot_sensor_error` | Sensor error flag | device_id, device_name |
-| `coolbot_frost_alarm` | Frost alarm flag | device_id, device_name |
-| `coolbot_last_update_timestamp_seconds` | Last update time | device_id, device_name |
-| `coolbot_device_info` | Device metadata | device_id, device_name, firmware_version, status |
+Data is written to the `coolbot` measurement with the following fields:
 
-## Grafana Dashboard
+| Field | Type | Description |
+|-------|------|-------------|
+| `room_temp_f` | float | Room temperature (°F) |
+| `frost_temp_f` | float | Frost/fin temperature (°F) |
+| `set_point_f` | float | Target set point (°F) |
+| `humidity_pct` | float | Humidity percentage |
+| `compressor_state` | int | Compressor on/off (0/1) |
+| `rssi_dbm` | int | WiFi signal strength (dBm) |
+| `online` | int | Device online status (0/1) |
+| `firmware_version` | string | Firmware version |
+| `status` | string | Device status |
 
-Example queries:
+Tags:
+- `device_id` - Device identifier
+- `device_name` - Device name
 
-```promql
-# Current room temperature
-coolbot_room_temperature_fahrenheit{device_name="CoolBot"}
+## Flux Queries
 
-# Temperature vs set point
-coolbot_room_temperature_fahrenheit - coolbot_set_point_fahrenheit
+```flux
+// Current room temperature
+from(bucket: "coolbot")
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._measurement == "coolbot")
+  |> filter(fn: (r) => r._field == "room_temp_f")
 
-# Compressor duty cycle (over 1 hour)
-avg_over_time(coolbot_compressor_state[1h]) * 100
+// Temperature vs set point
+from(bucket: "coolbot")
+  |> range(start: -24h)
+  |> filter(fn: (r) => r._measurement == "coolbot")
+  |> filter(fn: (r) => r._field == "room_temp_f" or r._field == "set_point_f")
+
+// Compressor duty cycle
+from(bucket: "coolbot")
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._measurement == "coolbot")
+  |> filter(fn: (r) => r._field == "compressor_state")
+  |> mean()
+  |> map(fn: (r) => ({r with _value: r._value * 100.0}))
 ```
 
 ## Library Usage
