@@ -1,12 +1,12 @@
 # CoolBot Client
 
-A Go client library for [CoolBot Pro](https://www.storeitcold.com/product/coolbot-pro/) temperature controllers that writes metrics to InfluxDB.
+A Go client library for [CoolBot Pro](https://www.storeitcold.com/product/coolbot-pro/) temperature controllers that publishes metrics to MQTT.
 
 ## Features
 
 - WebSocket client for CoolBot Pro's Blynk-based protocol
 - Real-time temperature and device status updates
-- Direct InfluxDB integration for time-series storage
+- MQTT publishing for integration with Telegraf/InfluxDB
 - Support for multiple devices
 
 ## Installation
@@ -30,15 +30,11 @@ task build
 coolbot-exporter \
   -email user@example.com \
   -password yourpassword \
-  -influx-url http://minis.local:8086 \
-  -influx-token your-influxdb-token \
-  -influx-org home \
-  -influx-bucket coolbot
+  -mqtt-broker tcp://minis.local:1883
 
 # Using environment variables
 export COOLBOT_EMAIL=user@example.com
 export COOLBOT_PASSWORD=yourpassword
-export INFLUXDB_TOKEN=your-influxdb-token
 coolbot-exporter
 ```
 
@@ -49,61 +45,43 @@ coolbot-exporter
 | `-email` | `COOLBOT_EMAIL` | - | CoolBot account email |
 | `-password` | `COOLBOT_PASSWORD` | - | CoolBot account password |
 | `-server` | - | `cb.storeitcold.com` | CoolBot server |
-| `-influx-url` | `INFLUXDB_URL` | `http://minis.local:8086` | InfluxDB server URL |
-| `-influx-token` | `INFLUXDB_TOKEN` | - | InfluxDB API token |
-| `-influx-org` | - | `home` | InfluxDB organization |
-| `-influx-bucket` | - | `coolbot` | InfluxDB bucket |
-| `-interval` | - | `15s` | Metrics write interval |
+| `-mqtt-broker` | `MQTT_BROKER` | `tcp://minis.local:1883` | MQTT broker URL |
+| `-mqtt-client-id` | - | `coolbot-exporter` | MQTT client ID |
+| `-mqtt-username` | `MQTT_USERNAME` | - | MQTT username (optional) |
+| `-mqtt-password` | `MQTT_PASSWORD` | - | MQTT password (optional) |
+| `-mqtt-prefix` | - | `farm/sensors/coolbot` | MQTT topic prefix |
+| `-interval` | - | `15s` | Publish interval |
 | `-log-level` | - | `info` | Log level (debug, info, warn, error) |
 
-## InfluxDB Setup
+## MQTT Topics
 
-1. Create a bucket named `coolbot` in your InfluxDB instance
-2. Generate an API token with write access to the bucket
-3. Run the exporter with your credentials
+Data is published to `farm/sensors/coolbot/<attribute>` with plain float values:
 
-## Metrics
+| Topic | Description | Example |
+|-------|-------------|---------|
+| `farm/sensors/coolbot/room_temp` | Room temperature (°F) | `41.50` |
+| `farm/sensors/coolbot/frost_temp` | Frost/fin temperature (°F) | `39.20` |
+| `farm/sensors/coolbot/set_point` | Target set point (°F) | `42.00` |
+| `farm/sensors/coolbot/humidity` | Humidity percentage | `65.0` |
+| `farm/sensors/coolbot/compressor_state` | Compressor on/off | `1` |
+| `farm/sensors/coolbot/rssi` | WiFi signal strength (dBm) | `-71` |
+| `farm/sensors/coolbot/online` | Device online status | `1` |
 
-Data is written to the `coolbot` measurement with the following fields:
+## Telegraf Configuration
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `room_temp_f` | float | Room temperature (°F) |
-| `frost_temp_f` | float | Frost/fin temperature (°F) |
-| `set_point_f` | float | Target set point (°F) |
-| `humidity_pct` | float | Humidity percentage |
-| `compressor_state` | int | Compressor on/off (0/1) |
-| `rssi_dbm` | int | WiFi signal strength (dBm) |
-| `online` | int | Device online status (0/1) |
-| `firmware_version` | string | Firmware version |
-| `status` | string | Device status |
+Add to your `telegraf.conf` to consume these topics:
 
-Tags:
-- `device_id` - Device identifier
-- `device_name` - Device name
+```toml
+[[inputs.mqtt_consumer]]
+  servers = ["tcp://localhost:1883"]
+  topics = ["farm/sensors/coolbot/#"]
+  data_format = "value"
+  data_type = "float"
 
-## Flux Queries
-
-```flux
-// Current room temperature
-from(bucket: "coolbot")
-  |> range(start: -1h)
-  |> filter(fn: (r) => r._measurement == "coolbot")
-  |> filter(fn: (r) => r._field == "room_temp_f")
-
-// Temperature vs set point
-from(bucket: "coolbot")
-  |> range(start: -24h)
-  |> filter(fn: (r) => r._measurement == "coolbot")
-  |> filter(fn: (r) => r._field == "room_temp_f" or r._field == "set_point_f")
-
-// Compressor duty cycle
-from(bucket: "coolbot")
-  |> range(start: -1h)
-  |> filter(fn: (r) => r._measurement == "coolbot")
-  |> filter(fn: (r) => r._field == "compressor_state")
-  |> mean()
-  |> map(fn: (r) => ({r with _value: r._value * 100.0}))
+  [[inputs.mqtt_consumer.topic_parsing]]
+    topic = "farm/sensors/+/+"
+    measurement = "measurement/_/_"
+    tags = "_/device/field"
 ```
 
 ## Library Usage
@@ -141,6 +119,19 @@ func main() {
     // Listen for real-time updates
     cb.Listen(context.Background())
 }
+```
+
+## Testing with mosquitto
+
+```bash
+# Subscribe to all coolbot topics
+mosquitto_sub -h minis.local -t "farm/sensors/coolbot/#" -v
+
+# You should see:
+# farm/sensors/coolbot/room_temp 41.50
+# farm/sensors/coolbot/frost_temp 39.20
+# farm/sensors/coolbot/set_point 42.00
+# ...
 ```
 
 ## Protocol Documentation

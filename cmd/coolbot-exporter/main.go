@@ -1,4 +1,4 @@
-// Command coolbot-exporter collects CoolBot Pro data and writes to InfluxDB.
+// Command coolbot-exporter collects CoolBot Pro data and publishes to MQTT.
 package main
 
 import (
@@ -22,14 +22,15 @@ func main() {
 		password = flag.String("password", "", "CoolBot account password")
 		server   = flag.String("server", client.DefaultServer, "CoolBot server address")
 
-		// InfluxDB configuration
-		influxURL    = flag.String("influx-url", "http://minis.local:8086", "InfluxDB server URL")
-		influxToken  = flag.String("influx-token", "", "InfluxDB API token")
-		influxOrg    = flag.String("influx-org", "home", "InfluxDB organization")
-		influxBucket = flag.String("influx-bucket", "coolbot", "InfluxDB bucket")
+		// MQTT configuration
+		mqttBroker   = flag.String("mqtt-broker", "tcp://minis.local:1883", "MQTT broker URL")
+		mqttClientID = flag.String("mqtt-client-id", "coolbot-exporter", "MQTT client ID")
+		mqttUsername = flag.String("mqtt-username", "", "MQTT username (optional)")
+		mqttPassword = flag.String("mqtt-password", "", "MQTT password (optional)")
+		mqttPrefix   = flag.String("mqtt-prefix", "farm/sensors/coolbot", "MQTT topic prefix")
 
 		// General options
-		interval = flag.Duration("interval", 15*time.Second, "Metrics write interval")
+		interval = flag.Duration("interval", 15*time.Second, "Publish interval")
 		logLevel = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
 	)
 	flag.Parse()
@@ -41,24 +42,21 @@ func main() {
 	if *password == "" {
 		*password = os.Getenv("COOLBOT_PASSWORD")
 	}
-	if *influxToken == "" {
-		*influxToken = os.Getenv("INFLUXDB_TOKEN")
-	}
-	if *influxURL == "" || *influxURL == "http://minis:8086" {
-		if env := os.Getenv("INFLUXDB_URL"); env != "" {
-			*influxURL = env
+	if *mqttBroker == "tcp://minis.local:1883" {
+		if env := os.Getenv("MQTT_BROKER"); env != "" {
+			*mqttBroker = env
 		}
+	}
+	if *mqttUsername == "" {
+		*mqttUsername = os.Getenv("MQTT_USERNAME")
+	}
+	if *mqttPassword == "" {
+		*mqttPassword = os.Getenv("MQTT_PASSWORD")
 	}
 
 	if *email == "" || *password == "" {
 		fmt.Fprintln(os.Stderr, "Error: CoolBot email and password are required")
 		fmt.Fprintln(os.Stderr, "Set via flags or COOLBOT_EMAIL / COOLBOT_PASSWORD environment variables")
-		os.Exit(1)
-	}
-
-	if *influxToken == "" {
-		fmt.Fprintln(os.Stderr, "Error: InfluxDB token is required")
-		fmt.Fprintln(os.Stderr, "Set via -influx-token flag or INFLUXDB_TOKEN environment variable")
 		os.Exit(1)
 	}
 
@@ -75,22 +73,22 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 
-	// Create InfluxDB writer
-	influxCfg := metrics.Config{
-		URL:    *influxURL,
-		Token:  *influxToken,
-		Org:    *influxOrg,
-		Bucket: *influxBucket,
+	// Create MQTT publisher
+	mqttCfg := metrics.Config{
+		Broker:   *mqttBroker,
+		ClientID: *mqttClientID,
+		Username: *mqttUsername,
+		Password: *mqttPassword,
+		Prefix:   *mqttPrefix,
 	}
-	writer := metrics.NewWriter(influxCfg, logger)
-	defer writer.Close()
 
-	// Test InfluxDB connection
-	ctx := context.Background()
-	if err := writer.Ping(ctx); err != nil {
-		logger.Error("failed to connect to InfluxDB", "error", err, "url", *influxURL)
+	logger.Info("connecting to MQTT", "broker", *mqttBroker)
+	publisher, err := metrics.NewPublisher(mqttCfg, logger)
+	if err != nil {
+		logger.Error("failed to connect to MQTT", "error", err)
 		os.Exit(1)
 	}
+	defer publisher.Close()
 
 	// Create CoolBot client
 	cb := client.New(*email, *password,
@@ -113,10 +111,10 @@ func main() {
 	}
 	defer cb.Close()
 
-	// Initial metrics write
-	writeMetrics(ctx, cb, writer, logger)
+	// Initial publish
+	publishMetrics(cb, publisher, logger)
 
-	// Start periodic metrics write
+	// Start periodic publish
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 
@@ -127,13 +125,13 @@ func main() {
 		}
 	}()
 
-	logger.Info("started", "interval", *interval, "influx_url", *influxURL, "bucket", *influxBucket)
+	logger.Info("started", "interval", *interval, "mqtt_broker", *mqttBroker, "prefix", *mqttPrefix)
 
 	// Main loop
 	for {
 		select {
 		case <-ticker.C:
-			writeMetrics(ctx, cb, writer, logger)
+			publishMetrics(cb, publisher, logger)
 		case sig := <-sigCh:
 			logger.Info("received signal, shutting down", "signal", sig)
 			cancel()
@@ -142,7 +140,7 @@ func main() {
 	}
 }
 
-func writeMetrics(ctx context.Context, cb *client.Client, writer *metrics.Writer, logger *slog.Logger) {
+func publishMetrics(cb *client.Client, publisher *metrics.Publisher, logger *slog.Logger) {
 	devices := cb.GetDevices()
 	for _, dev := range devices {
 		m := metrics.DeviceMetrics{
@@ -159,8 +157,8 @@ func writeMetrics(ctx context.Context, cb *client.Client, writer *metrics.Writer
 			Status:          dev.Status,
 		}
 
-		if err := writer.WriteDeviceMetrics(ctx, m); err != nil {
-			logger.Error("failed to write metrics", "error", err, "device", dev.Name)
+		if err := publisher.PublishDeviceMetrics(m); err != nil {
+			logger.Error("failed to publish metrics", "error", err, "device", dev.Name)
 		}
 	}
 }
