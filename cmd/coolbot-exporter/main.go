@@ -23,7 +23,7 @@ func main() {
 		server   = flag.String("server", client.DefaultServer, "CoolBot server address")
 
 		// InfluxDB configuration
-		influxURL    = flag.String("influx-url", "http://minis:8086", "InfluxDB server URL")
+		influxURL    = flag.String("influx-url", "http://minis.local:8086", "InfluxDB server URL")
 		influxToken  = flag.String("influx-token", "", "InfluxDB API token")
 		influxOrg    = flag.String("influx-org", "home", "InfluxDB organization")
 		influxBucket = flag.String("influx-bucket", "coolbot", "InfluxDB bucket")

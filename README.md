@@ -30,7 +30,7 @@ task build
 coolbot-exporter \
   -email user@example.com \
   -password yourpassword \
-  -influx-url http://minis:8086 \
+  -influx-url http://minis.local:8086 \
   -influx-token your-influxdb-token \
   -influx-org home \
   -influx-bucket coolbot
@@ -49,7 +49,7 @@ coolbot-exporter
 | `-email` | `COOLBOT_EMAIL` | - | CoolBot account email |
 | `-password` | `COOLBOT_PASSWORD` | - | CoolBot account password |
 | `-server` | - | `cb.storeitcold.com` | CoolBot server |
-| `-influx-url` | `INFLUXDB_URL` | `http://minis:8086` | InfluxDB server URL |
+| `-influx-url` | `INFLUXDB_URL` | `http://minis.local:8086` | InfluxDB server URL |
 | `-influx-token` | `INFLUXDB_TOKEN` | - | InfluxDB API token |
 | `-influx-org` | - | `home` | InfluxDB organization |
 | `-influx-bucket` | - | `coolbot` | InfluxDB bucket |
