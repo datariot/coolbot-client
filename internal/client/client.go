@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	DefaultServer    = "cb.storeitcold.com"
-	DefaultWSPath    = "/websockets"
+	DefaultServer    = "cbws.storeitcold.com"
+	DefaultWSPath    = "/websocket"
 	HeartbeatTimeout = 10 * time.Second
 	ReadTimeout      = 30 * time.Second
 )
