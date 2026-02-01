@@ -11,6 +11,7 @@ import (
 // Command types in the Blynk binary protocol.
 const (
 	CmdResponse          byte = 0
+	CmdRegister          byte = 1
 	CmdLogin             byte = 2
 	CmdSaveProfile       byte = 3
 	CmdLoadProfile       byte = 4
@@ -19,14 +20,22 @@ const (
 	CmdActivate          byte = 7
 	CmdDeactivate        byte = 8
 	CmdRefresh           byte = 9
+	CmdGetGraphData      byte = 10
 	CmdTweet             byte = 12
 	CmdEmail             byte = 13
 	CmdNotify            byte = 14
 	CmdBridge            byte = 15
 	CmdHardwareSync      byte = 16
-	CmdInternal          byte = 17
+	CmdHardwareInfo      byte = 17
+	CmdSMS               byte = 18
 	CmdProperty          byte = 19
 	CmdHardware          byte = 20
+	CmdCreateDash        byte = 21
+	CmdSaveDash          byte = 22
+	CmdDeleteDash        byte = 23
+	CmdLoadProfileGZ     byte = 24  // Load profile gzipped
+	CmdSync              byte = 25
+	CmdSharing           byte = 26
 	CmdHardwareLogin     byte = 29
 	CmdRedirect          byte = 41
 	CmdDebugPrint        byte = 55
@@ -154,9 +163,10 @@ func CommandName(cmd byte) string {
 		CmdDeactivate:    "DEACTIVATE",
 		CmdRefresh:       "REFRESH",
 		CmdHardwareSync:  "HW_SYNC",
-		CmdInternal:      "INTERNAL",
+		CmdHardwareInfo:  "HW_INFO",
 		CmdProperty:      "PROPERTY",
 		CmdHardware:      "HARDWARE",
+		CmdLoadProfileGZ: "LOAD_PROFILE_GZ",
 		CmdHardwareLogin: "HW_LOGIN",
 		CmdRedirect:      "REDIRECT",
 	}

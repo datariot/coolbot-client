@@ -3,7 +3,7 @@ package client
 
 import (
 	"bytes"
-	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -67,9 +67,9 @@ type DeviceUpdate struct {
 
 // Profile contains the user profile data from the server.
 type Profile struct {
-	Dashboards   []Dashboard  `json:"dashBoards"`
-	Subscription Subscription `json:"subscription"`
-	Account      Account      `json:"account"`
+	Dashboards   []Dashboard     `json:"dashBoards"`
+	Subscription json.RawMessage `json:"subscription,omitempty"`
+	Account      json.RawMessage `json:"account,omitempty"`
 }
 
 type Dashboard struct {
@@ -255,23 +255,40 @@ func (c *Client) login(ctx context.Context) error {
 
 func (c *Client) loadProfile(ctx context.Context) error {
 	msgID := c.nextMsgID()
-	msg := protocol.FormatMessage(protocol.CmdLoadProfile, msgID)
+	msg := protocol.FormatMessage(protocol.CmdLoadProfileGZ, msgID)
 
 	if err := c.sendBinary(ctx, msg); err != nil {
 		return fmt.Errorf("send load profile: %w", err)
 	}
 
-	resp, data, err := c.receiveBinary(ctx)
-	if err != nil {
-		return fmt.Errorf("receive profile: %w", err)
+	// Wait for LOAD_PROFILE response, skip other messages (like HARDWARE updates)
+	var profileData []byte
+	for i := 0; i < 10; i++ { // Max 10 attempts to find profile response
+		resp, data, err := c.receiveBinary(ctx)
+		if err != nil {
+			return fmt.Errorf("receive profile: %w", err)
+		}
+
+		// Skip hardware updates and other messages
+		if resp.Command == protocol.CmdHardware {
+			c.logger.Debug("skipping hardware message while loading profile")
+			continue
+		}
+
+		// Check for profile response
+		if resp.Command == protocol.CmdLoadProfileGZ {
+			// Log first bytes to debug format
+			if len(data) > protocol.HeaderSize {
+				preview := data[protocol.HeaderSize:min(len(data), protocol.HeaderSize+20)]
+				c.logger.Debug("profile data received", "len", len(data)-protocol.HeaderSize, "first_bytes", fmt.Sprintf("%x", preview))
+			}
+			profileData = data[protocol.HeaderSize:]
+			break
+		}
 	}
 
-	// Profile response has the JSON in the body
-	var profileData []byte
-	if resp.Command == protocol.CmdLoadProfile && len(resp.Body) > 0 {
-		profileData = resp.Body
-	} else if len(data) > protocol.HeaderSize {
-		profileData = data[protocol.HeaderSize:]
+	if len(profileData) == 0 {
+		return fmt.Errorf("no profile data received")
 	}
 
 	profile, err := c.parseProfile(profileData)
@@ -289,31 +306,33 @@ func (c *Client) loadProfile(ctx context.Context) error {
 }
 
 func (c *Client) parseProfile(data []byte) (*Profile, error) {
-	// Try to find JSON start - may have protocol prefix or be gzipped
-	jsonStart := bytes.IndexByte(data, '{')
-	if jsonStart == -1 {
-		// Try GZIP decompression
-		reader, err := gzip.NewReader(bytes.NewReader(data))
+	// Check for zlib magic bytes (0x78 0x9c, 0x78 0x01, 0x78 0x5e, 0x78 0xda)
+	if len(data) >= 2 && data[0] == 0x78 {
+		reader, err := zlib.NewReader(bytes.NewReader(data))
 		if err != nil {
-			return nil, fmt.Errorf("gzip reader: %w (data starts with: %x)", err, data[:min(len(data), 10)])
+			return nil, fmt.Errorf("zlib reader: %w", err)
 		}
 		defer reader.Close()
 
 		decompressed, err := io.ReadAll(reader)
 		if err != nil {
-			return nil, fmt.Errorf("gzip read: %w", err)
+			return nil, fmt.Errorf("zlib read: %w", err)
 		}
 		data = decompressed
-		jsonStart = bytes.IndexByte(data, '{')
+		c.logger.Debug("decompressed profile", "size", len(data))
 	}
 
+	// Find JSON start
+	jsonStart := bytes.IndexByte(data, '{')
 	if jsonStart >= 0 {
 		data = data[jsonStart:]
 	}
 
 	var profile Profile
 	if err := json.Unmarshal(data, &profile); err != nil {
-		return nil, fmt.Errorf("json unmarshal: %w", err)
+		// Log first 100 chars for debugging
+		preview := string(data[:min(len(data), 100)])
+		return nil, fmt.Errorf("json unmarshal: %w (preview: %s)", err, preview)
 	}
 	return &profile, nil
 }
