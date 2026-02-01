@@ -165,7 +165,13 @@ func (c *Client) Connect(ctx context.Context) error {
 	url := fmt.Sprintf("wss://%s%s", c.server, DefaultWSPath)
 	c.logger.Info("connecting", "url", url)
 
-	conn, _, err := websocket.Dial(ctx, url, nil)
+	opts := &websocket.DialOptions{
+		HTTPHeader: map[string][]string{
+			"Origin": {"https://cb.storeitcold.com"},
+		},
+	}
+
+	conn, _, err := websocket.Dial(ctx, url, opts)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
