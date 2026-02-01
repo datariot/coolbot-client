@@ -7,15 +7,15 @@ import (
 )
 
 // HashPassword creates a Blynk-compatible password hash.
-// The algorithm is: base64(SHA256(SHA256(lowercase_email) + password))
+// The algorithm is: base64(SHA256(password + SHA256(lowercase_email)))
 func HashPassword(email, password string) string {
 	// First hash: SHA256 of lowercase email
 	emailHash := sha256.Sum256([]byte(strings.ToLower(email)))
 
-	// Second hash: SHA256 of (email_hash + password)
+	// Second hash: SHA256 of (password + email_hash)
 	combined := sha256.New()
-	combined.Write(emailHash[:])
 	combined.Write([]byte(password))
+	combined.Write(emailHash[:])
 	finalHash := combined.Sum(nil)
 
 	// Encode as base64
