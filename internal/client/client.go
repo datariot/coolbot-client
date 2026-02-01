@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,7 +32,7 @@ type Client struct {
 	server      string
 	credentials *protocol.Credentials
 	conn        *websocket.Conn
-	msgID       atomic.Int32
+	msgID       atomic.Uint32
 	logger      *slog.Logger
 
 	mu        sync.RWMutex
@@ -66,17 +68,17 @@ type DeviceUpdate struct {
 
 // Profile contains the user profile data from the server.
 type Profile struct {
-	Dashboards   []Dashboard   `json:"dashBoards"`
-	Subscription Subscription  `json:"subscription"`
-	Account      Account       `json:"account"`
+	Dashboards   []Dashboard  `json:"dashBoards"`
+	Subscription Subscription `json:"subscription"`
+	Account      Account      `json:"account"`
 }
 
 type Dashboard struct {
-	ID           int                    `json:"id"`
-	Name         string                 `json:"name"`
-	Devices      []Device               `json:"devices"`
-	Widgets      []Widget               `json:"widgets"`
-	PinsStorage  map[string]string      `json:"pinsStorage"`
+	ID          int               `json:"id"`
+	Name        string            `json:"name"`
+	Devices     []Device          `json:"devices"`
+	Widgets     []Widget          `json:"widgets"`
+	PinsStorage map[string]string `json:"pinsStorage"`
 }
 
 type Device struct {
@@ -201,72 +203,91 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) nextMsgID() int {
-	return int(c.msgID.Add(1))
+func (c *Client) nextMsgID() uint16 {
+	return uint16(c.msgID.Add(1))
 }
 
-func (c *Client) send(ctx context.Context, msg string) error {
-	c.logger.Debug("sending", "msg", msg)
-	return c.conn.Write(ctx, websocket.MessageText, []byte(msg))
+func (c *Client) sendMessage(ctx context.Context, msg *protocol.Message) error {
+	data := msg.Encode()
+	c.logger.Debug("sending", "cmd", msg.Command, "msgId", msg.MessageID, "len", len(msg.Body), "hex", hex.EncodeToString(data))
+	return c.conn.Write(ctx, websocket.MessageBinary, data)
 }
 
-func (c *Client) receive(ctx context.Context) (string, []byte, error) {
+func (c *Client) receiveMessage(ctx context.Context) (*protocol.Message, error) {
 	ctx, cancel := context.WithTimeout(ctx, ReadTimeout)
 	defer cancel()
 
-	msgType, data, err := c.conn.Read(ctx)
+	_, data, err := c.conn.Read(ctx)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 
-	if msgType == websocket.MessageText {
-		c.logger.Debug("received", "msg", string(data))
-		return string(data), data, nil
+	c.logger.Debug("received", "len", len(data), "hex", hex.EncodeToString(data[:min(len(data), 32)]))
+
+	// For response messages, the format is slightly different
+	// [cmd:1][msgId:2][status:2]
+	if len(data) >= 5 && data[0] == protocol.CmdResponse {
+		return &protocol.Message{
+			Command:   data[0],
+			MessageID: binary.BigEndian.Uint16(data[1:3]),
+			Body:      data[3:5], // Status code is in the "length" position
+		}, nil
 	}
-	return "", data, nil
+
+	return protocol.ParseMessage(data)
 }
 
 func (c *Client) login(ctx context.Context) error {
 	msgID := c.nextMsgID()
-	params := c.credentials.LoginParams()
-	msg := protocol.FormatMessage(protocol.CmdLogin, msgID, params...)
+	msg := protocol.NewLoginMessage(
+		msgID,
+		c.credentials.Email,
+		c.credentials.PasswordHash,
+		c.credentials.ClientType,
+		c.credentials.BuildNumber,
+		c.credentials.Platform,
+	)
 
-	if err := c.send(ctx, msg); err != nil {
+	if err := c.sendMessage(ctx, msg); err != nil {
 		return fmt.Errorf("send login: %w", err)
 	}
 
-	resp, _, err := c.receive(ctx)
+	resp, err := c.receiveMessage(ctx)
 	if err != nil {
 		return fmt.Errorf("receive login response: %w", err)
 	}
 
-	parsed, err := protocol.ParseMessage(resp)
-	if err != nil {
-		return fmt.Errorf("parse login response: %w", err)
+	c.logger.Debug("login response", "cmd", resp.Command, "msgId", resp.MessageID, "body", hex.EncodeToString(resp.Body))
+
+	// Check for success (status 200)
+	if resp.Command != protocol.CmdResponse {
+		return fmt.Errorf("unexpected response command: %d", resp.Command)
 	}
 
-	if parsed.Command != protocol.CmdResponse || len(parsed.Params) == 0 || parsed.Params[0] != "Ok" {
-		return fmt.Errorf("login failed: %v", parsed.Params)
+	status := binary.BigEndian.Uint16(resp.Body)
+	if status != 200 {
+		return fmt.Errorf("login failed with status: %d", status)
 	}
 
+	c.logger.Info("login successful")
 	return nil
 }
 
 func (c *Client) loadProfile(ctx context.Context) error {
 	msgID := c.nextMsgID()
-	msg := protocol.LoadProfileMessage(msgID)
+	msg := protocol.NewLoadProfileMessage(msgID)
 
-	if err := c.send(ctx, msg); err != nil {
+	if err := c.sendMessage(ctx, msg); err != nil {
 		return fmt.Errorf("send load profile: %w", err)
 	}
 
-	_, data, err := c.receive(ctx)
+	resp, err := c.receiveMessage(ctx)
 	if err != nil {
 		return fmt.Errorf("receive profile: %w", err)
 	}
 
-	// Profile data is GZIP compressed JSON
-	profile, err := c.parseProfile(data)
+	// Profile data is GZIP compressed JSON in the body
+	profile, err := c.parseProfile(resp.Body)
 	if err != nil {
 		return fmt.Errorf("parse profile: %w", err)
 	}
@@ -365,49 +386,45 @@ func (c *Client) Listen(ctx context.Context) error {
 		default:
 		}
 
-		text, _, err := c.receive(ctx)
+		msg, err := c.receiveMessage(ctx)
 		if err != nil {
 			return fmt.Errorf("receive: %w", err)
 		}
 
-		if text == "" {
-			continue
-		}
-
-		msg, err := protocol.ParseMessage(text)
-		if err != nil {
-			c.logger.Warn("parse error", "error", err, "msg", text)
-			continue
-		}
-
-		c.handleMessage(msg)
+		c.handleMessage(ctx, msg)
 	}
 }
 
-func (c *Client) handleMessage(msg *protocol.Message) {
+func (c *Client) handleMessage(ctx context.Context, msg *protocol.Message) {
 	switch msg.Command {
 	case protocol.CmdHardware:
 		c.handleHardware(msg)
 	case protocol.CmdPing:
-		c.send(context.Background(), protocol.FormatMessage(protocol.CmdPong, msg.MessageID))
+		// Respond to ping with pong
+		pong := &protocol.Message{
+			Command:   protocol.CmdPing, // Pong uses same command
+			MessageID: msg.MessageID,
+		}
+		c.sendMessage(ctx, pong)
 	}
 }
 
 func (c *Client) handleHardware(msg *protocol.Message) {
+	params := msg.ParseParams()
 	// Format: [dashboardId, "vw", pin, value]
-	if len(msg.Params) < 4 {
+	if len(params) < 4 {
 		return
 	}
 
-	if msg.Params[1] != "vw" {
+	if params[1] != "vw" {
 		return
 	}
 
-	pin, err := strconv.Atoi(msg.Params[2])
+	pin, err := strconv.Atoi(params[2])
 	if err != nil {
 		return
 	}
-	value := msg.Params[3]
+	value := params[3]
 
 	c.mu.Lock()
 	// Find device by dashboard (device 0 is typical)

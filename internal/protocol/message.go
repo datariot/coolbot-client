@@ -1,112 +1,117 @@
-// Package protocol implements the Blynk WebSocket protocol used by CoolBot Pro.
+// Package protocol implements the Blynk binary protocol used by CoolBot Pro.
 package protocol
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
-	"strconv"
 	"strings"
 )
 
-// Separator is the middle dot character used in Blynk protocol messages.
-const Separator = "·" // U+00B7
-
-// Command types in the Blynk protocol.
+// Command bytes for the Blynk protocol.
 const (
-	CmdLogin              = "LOGIN"
-	CmdResponse           = "RESPONSE"
-	CmdLoadProfileGzipped = "LOAD_PROFILE_GZIPPED"
-	CmdGetProjectByToken  = "GET_PROJECT_BY_TOKEN"
-	CmdHardware           = "HARDWARE"
-	CmdPing               = "PING"
-	CmdPong               = "PONG"
+	CmdResponse           byte = 0x00
+	CmdLogin              byte = 0x02
+	CmdPing               byte = 0x06
+	CmdLoadProfileGzipped byte = 0x0B // 11
+	CmdHardware           byte = 0x14 // 20
+	CmdGetProjectByToken  byte = 0x1A // 26
 )
 
 // HardwareStreamID is the special message ID used for streaming hardware updates.
 const HardwareStreamID = 7778
 
-// Message represents a parsed Blynk protocol message.
+// Message represents a Blynk protocol message.
 type Message struct {
-	Command   string
-	MessageID int
-	Params    []string
+	Command   byte
+	MessageID uint16
+	Body      []byte
 }
 
-// ParseMessage parses a raw Blynk protocol message.
-// Format: COMMAND @id: [param1·param2·...]
-func ParseMessage(raw string) (*Message, error) {
-	// Find command and message ID
-	atIdx := strings.Index(raw, " @")
-	if atIdx == -1 {
-		return nil, fmt.Errorf("invalid message format: missing @")
+// Encode serializes the message to binary format.
+// Format: [command:1][msgId:2][length:2][body:N]
+func (m *Message) Encode() []byte {
+	buf := make([]byte, 5+len(m.Body))
+	buf[0] = m.Command
+	binary.BigEndian.PutUint16(buf[1:3], m.MessageID)
+	binary.BigEndian.PutUint16(buf[3:5], uint16(len(m.Body)))
+	copy(buf[5:], m.Body)
+	return buf
+}
+
+// ParseMessage parses a binary Blynk message.
+func ParseMessage(data []byte) (*Message, error) {
+	if len(data) < 5 {
+		return nil, fmt.Errorf("message too short: %d bytes", len(data))
 	}
 
-	command := raw[:atIdx]
-
-	// Find message ID
-	colonIdx := strings.Index(raw[atIdx:], ":")
-	if colonIdx == -1 {
-		// Response format: RESPONSE @1 = Ok
-		eqIdx := strings.Index(raw[atIdx:], " = ")
-		if eqIdx != -1 {
-			idStr := raw[atIdx+2 : atIdx+eqIdx]
-			id, err := strconv.Atoi(idStr)
-			if err != nil {
-				return nil, fmt.Errorf("invalid message ID: %w", err)
-			}
-			value := raw[atIdx+eqIdx+3:]
-			return &Message{
-				Command:   command,
-				MessageID: id,
-				Params:    []string{value},
-			}, nil
-		}
-		return nil, fmt.Errorf("invalid message format: missing :")
+	msg := &Message{
+		Command:   data[0],
+		MessageID: binary.BigEndian.Uint16(data[1:3]),
 	}
 
-	idStr := raw[atIdx+2 : atIdx+colonIdx]
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid message ID: %w", err)
+	length := binary.BigEndian.Uint16(data[3:5])
+	if len(data) < int(5+length) {
+		return nil, fmt.Errorf("incomplete message: expected %d bytes, got %d", 5+length, len(data))
 	}
 
-	// Parse parameters
-	paramsStart := atIdx + colonIdx + 1
-	paramsStr := strings.TrimSpace(raw[paramsStart:])
+	msg.Body = data[5 : 5+length]
+	return msg, nil
+}
 
-	// Remove brackets if present
-	if strings.HasPrefix(paramsStr, "[") && strings.HasSuffix(paramsStr, "]") {
-		paramsStr = paramsStr[1 : len(paramsStr)-1]
+// ParseParams splits the message body by null bytes into parameters.
+func (m *Message) ParseParams() []string {
+	if len(m.Body) == 0 {
+		return nil
 	}
+	// Trim trailing null if present
+	body := bytes.TrimRight(m.Body, "\x00")
+	return strings.Split(string(body), "\x00")
+}
 
-	var params []string
-	if paramsStr != "" {
-		params = strings.Split(paramsStr, Separator)
-	}
+// EncodeParams joins parameters with null bytes.
+func EncodeParams(params ...string) []byte {
+	return []byte(strings.Join(params, "\x00"))
+}
 
+// NewLoginMessage creates a LOGIN message.
+func NewLoginMessage(messageID uint16, email, passwordHash, clientType, buildNumber, platform string) *Message {
 	return &Message{
-		Command:   command,
-		MessageID: id,
-		Params:    params,
-	}, nil
+		Command:   CmdLogin,
+		MessageID: messageID,
+		Body:      EncodeParams(email, passwordHash, clientType, buildNumber, platform),
+	}
 }
 
-// FormatMessage creates a Blynk protocol message string.
-func FormatMessage(command string, messageID int, params ...string) string {
-	paramsStr := strings.Join(params, Separator)
-	return fmt.Sprintf("%s @%d: [%s]", command, messageID, paramsStr)
+// NewLoadProfileMessage creates a LOAD_PROFILE_GZIPPED message.
+func NewLoadProfileMessage(messageID uint16) *Message {
+	return &Message{
+		Command:   CmdLoadProfileGzipped,
+		MessageID: messageID,
+		Body:      nil,
+	}
 }
 
-// LoginMessage creates a LOGIN command message.
-func LoginMessage(messageID int, email, passwordHash, clientType, buildNumber, platform string) string {
-	return FormatMessage(CmdLogin, messageID, email, passwordHash, clientType, buildNumber, platform)
+// NewGetProjectByTokenMessage creates a GET_PROJECT_BY_TOKEN message.
+func NewGetProjectByTokenMessage(messageID uint16, token string) *Message {
+	return &Message{
+		Command:   CmdGetProjectByToken,
+		MessageID: messageID,
+		Body:      []byte(token),
+	}
 }
 
-// LoadProfileMessage creates a LOAD_PROFILE_GZIPPED command message.
-func LoadProfileMessage(messageID int) string {
-	return FormatMessage(CmdLoadProfileGzipped, messageID)
+// IsOK checks if a response indicates success.
+func (m *Message) IsOK() bool {
+	// Response with status code 200 in the length field means OK
+	return m.Command == CmdResponse && binary.BigEndian.Uint16(m.Body) == 200
 }
 
-// GetProjectByTokenMessage creates a GET_PROJECT_BY_TOKEN command message.
-func GetProjectByTokenMessage(messageID int, token string) string {
-	return FormatMessage(CmdGetProjectByToken, messageID, token)
+// ResponseStatus returns the status code from a response message.
+func (m *Message) ResponseStatus() uint16 {
+	if m.Command == CmdResponse && len(m.Body) >= 2 {
+		return binary.BigEndian.Uint16(m.Body)
+	}
+	// For response messages, the "length" field actually contains the status
+	return 0
 }
