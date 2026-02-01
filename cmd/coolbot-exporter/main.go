@@ -111,6 +111,16 @@ func main() {
 	}
 	defer cb.Close()
 
+	// Register callback for real-time updates
+	cb.OnUpdate(func(update client.DeviceUpdate) {
+		// Publish individual pin updates to MQTT immediately
+		if err := publisher.PublishSingle(update.PinName, update.Value); err != nil {
+			logger.Error("failed to publish update", "error", err, "pin", update.PinName)
+		} else {
+			logger.Debug("real-time update", "pin", update.PinName, "value", update.Value)
+		}
+	})
+
 	// Initial publish
 	publishMetrics(cb, publisher, logger)
 
