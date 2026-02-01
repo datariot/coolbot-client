@@ -1,4 +1,4 @@
-// Package protocol implements the Blynk binary protocol used by CoolBot Pro.
+// Package protocol implements the Blynk binary WebSocket protocol used by CoolBot Pro.
 package protocol
 
 import (
@@ -8,110 +8,160 @@ import (
 	"strings"
 )
 
-// Command bytes for the Blynk protocol.
+// Command types in the Blynk binary protocol.
 const (
-	CmdResponse           byte = 0x00
-	CmdLogin              byte = 0x02
-	CmdPing               byte = 0x06
-	CmdLoadProfileGzipped byte = 0x0B // 11
-	CmdHardware           byte = 0x14 // 20
-	CmdGetProjectByToken  byte = 0x1A // 26
+	CmdResponse          byte = 0
+	CmdLogin             byte = 2
+	CmdSaveProfile       byte = 3
+	CmdLoadProfile       byte = 4
+	CmdGetToken          byte = 5
+	CmdPing              byte = 6
+	CmdActivate          byte = 7
+	CmdDeactivate        byte = 8
+	CmdRefresh           byte = 9
+	CmdTweet             byte = 12
+	CmdEmail             byte = 13
+	CmdNotify            byte = 14
+	CmdBridge            byte = 15
+	CmdHardwareSync      byte = 16
+	CmdInternal          byte = 17
+	CmdProperty          byte = 19
+	CmdHardware          byte = 20
+	CmdHardwareLogin     byte = 29
+	CmdRedirect          byte = 41
+	CmdDebugPrint        byte = 55
+	CmdEventLog          byte = 64
 )
 
-// HardwareStreamID is the special message ID used for streaming hardware updates.
-const HardwareStreamID = 7778
+// Response status codes.
+const (
+	StatusOK                 uint16 = 200
+	StatusQuotaLimit         uint16 = 1
+	StatusIllegalCommand     uint16 = 2
+	StatusNotRegistered      uint16 = 3
+	StatusAlreadyRegistered  uint16 = 4
+	StatusNotAuthenticated   uint16 = 5
+	StatusNotAllowed         uint16 = 6
+	StatusDeviceNotInNetwork uint16 = 7
+	StatusNoActiveDevice     uint16 = 8
+	StatusInvalidToken       uint16 = 9
+	StatusIllegalCommandBody uint16 = 11
+	StatusGetGraphData       uint16 = 12
+	StatusNoData             uint16 = 17
+	StatusDeviceWentOffline  uint16 = 18
+	StatusServerError        uint16 = 19
+	StatusNotSupported       uint16 = 20
+)
 
-// Message represents a Blynk protocol message.
+// HeaderSize is the size of the Blynk message header.
+const HeaderSize = 5
+
+// Message represents a parsed Blynk protocol message.
 type Message struct {
 	Command   byte
 	MessageID uint16
+	Length    uint16
 	Body      []byte
+	Params    []string // Parsed null-separated parameters
 }
 
-// Encode serializes the message to binary format.
-// Format: [command:1][msgId:2][length:2][body:N]
-func (m *Message) Encode() []byte {
-	buf := make([]byte, 5+len(m.Body))
-	buf[0] = m.Command
-	binary.BigEndian.PutUint16(buf[1:3], m.MessageID)
-	binary.BigEndian.PutUint16(buf[3:5], uint16(len(m.Body)))
-	copy(buf[5:], m.Body)
-	return buf
-}
-
-// ParseMessage parses a binary Blynk message.
+// ParseMessage parses a binary Blynk protocol message.
 func ParseMessage(data []byte) (*Message, error) {
-	if len(data) < 5 {
+	if len(data) < HeaderSize {
 		return nil, fmt.Errorf("message too short: %d bytes", len(data))
 	}
 
 	msg := &Message{
 		Command:   data[0],
 		MessageID: binary.BigEndian.Uint16(data[1:3]),
+		Length:    binary.BigEndian.Uint16(data[3:5]),
 	}
 
-	length := binary.BigEndian.Uint16(data[3:5])
-	if len(data) < int(5+length) {
-		return nil, fmt.Errorf("incomplete message: expected %d bytes, got %d", 5+length, len(data))
+	if len(data) > HeaderSize {
+		msg.Body = data[HeaderSize:]
+		// Parse null-separated parameters
+		msg.Params = parseParams(msg.Body)
 	}
 
-	msg.Body = data[5 : 5+length]
 	return msg, nil
 }
 
-// ParseParams splits the message body by null bytes into parameters.
-func (m *Message) ParseParams() []string {
-	if len(m.Body) == 0 {
+// parseParams splits body by null bytes into string parameters.
+func parseParams(body []byte) []string {
+	if len(body) == 0 {
 		return nil
 	}
-	// Trim trailing null if present
-	body := bytes.TrimRight(m.Body, "\x00")
-	return strings.Split(string(body), "\x00")
-}
-
-// EncodeParams joins parameters with null bytes.
-func EncodeParams(params ...string) []byte {
-	return []byte(strings.Join(params, "\x00"))
-}
-
-// NewLoginMessage creates a LOGIN message.
-func NewLoginMessage(messageID uint16, email, passwordHash, clientType, buildNumber, platform string) *Message {
-	return &Message{
-		Command:   CmdLogin,
-		MessageID: messageID,
-		Body:      EncodeParams(email, passwordHash, clientType, buildNumber, platform),
+	// Split by null bytes, but handle last param which may not have trailing null
+	parts := bytes.Split(body, []byte{0})
+	params := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if len(p) > 0 {
+			params = append(params, string(p))
+		}
 	}
+	return params
 }
 
-// NewLoadProfileMessage creates a LOAD_PROFILE_GZIPPED message.
-func NewLoadProfileMessage(messageID uint16) *Message {
-	return &Message{
-		Command:   CmdLoadProfileGzipped,
-		MessageID: messageID,
-		Body:      nil,
-	}
+// FormatMessage creates a binary Blynk protocol message.
+func FormatMessage(cmd byte, msgID uint16, params ...string) []byte {
+	// Join params with null separator
+	body := []byte(strings.Join(params, "\x00"))
+
+	// Build message: header + body
+	msg := make([]byte, HeaderSize+len(body))
+	msg[0] = cmd
+	binary.BigEndian.PutUint16(msg[1:3], msgID)
+	binary.BigEndian.PutUint16(msg[3:5], uint16(len(body)))
+	copy(msg[HeaderSize:], body)
+
+	return msg
 }
 
-// NewGetProjectByTokenMessage creates a GET_PROJECT_BY_TOKEN message.
-func NewGetProjectByTokenMessage(messageID uint16, token string) *Message {
-	return &Message{
-		Command:   CmdGetProjectByToken,
-		MessageID: messageID,
-		Body:      []byte(token),
-	}
+// FormatResponse creates a response message (used for pong, etc).
+func FormatResponse(msgID uint16, status uint16) []byte {
+	msg := make([]byte, HeaderSize)
+	msg[0] = CmdResponse
+	binary.BigEndian.PutUint16(msg[1:3], msgID)
+	binary.BigEndian.PutUint16(msg[3:5], status)
+	return msg
 }
 
-// IsOK checks if a response indicates success.
+// IsResponse returns true if this is a response message.
+func (m *Message) IsResponse() bool {
+	return m.Command == CmdResponse
+}
+
+// Status returns the status code for response messages.
+func (m *Message) Status() uint16 {
+	return m.Length // For responses, the length field contains status
+}
+
+// IsOK returns true if this is a successful response.
 func (m *Message) IsOK() bool {
-	// Response with status code 200 in the length field means OK
-	return m.Command == CmdResponse && binary.BigEndian.Uint16(m.Body) == 200
+	return m.IsResponse() && m.Status() == StatusOK
 }
 
-// ResponseStatus returns the status code from a response message.
-func (m *Message) ResponseStatus() uint16 {
-	if m.Command == CmdResponse && len(m.Body) >= 2 {
-		return binary.BigEndian.Uint16(m.Body)
+// CommandName returns a human-readable name for the command.
+func CommandName(cmd byte) string {
+	names := map[byte]string{
+		CmdResponse:      "RESPONSE",
+		CmdLogin:         "LOGIN",
+		CmdSaveProfile:   "SAVE_PROFILE",
+		CmdLoadProfile:   "LOAD_PROFILE",
+		CmdGetToken:      "GET_TOKEN",
+		CmdPing:          "PING",
+		CmdActivate:      "ACTIVATE",
+		CmdDeactivate:    "DEACTIVATE",
+		CmdRefresh:       "REFRESH",
+		CmdHardwareSync:  "HW_SYNC",
+		CmdInternal:      "INTERNAL",
+		CmdProperty:      "PROPERTY",
+		CmdHardware:      "HARDWARE",
+		CmdHardwareLogin: "HW_LOGIN",
+		CmdRedirect:      "REDIRECT",
 	}
-	// For response messages, the "length" field actually contains the status
-	return 0
+	if name, ok := names[cmd]; ok {
+		return name
+	}
+	return fmt.Sprintf("CMD_%d", cmd)
 }

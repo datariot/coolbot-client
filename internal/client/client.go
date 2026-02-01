@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -207,87 +206,75 @@ func (c *Client) nextMsgID() uint16 {
 	return uint16(c.msgID.Add(1))
 }
 
-func (c *Client) sendMessage(ctx context.Context, msg *protocol.Message) error {
-	data := msg.Encode()
-	c.logger.Debug("sending", "cmd", msg.Command, "msgId", msg.MessageID, "len", len(msg.Body), "hex", hex.EncodeToString(data))
+func (c *Client) sendBinary(ctx context.Context, data []byte) error {
+	c.logger.Debug("sending", "cmd", protocol.CommandName(data[0]), "hex", hex.EncodeToString(data[:min(len(data), 20)]))
 	return c.conn.Write(ctx, websocket.MessageBinary, data)
 }
 
-func (c *Client) receiveMessage(ctx context.Context) (*protocol.Message, error) {
+func (c *Client) receiveBinary(ctx context.Context) (*protocol.Message, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, ReadTimeout)
 	defer cancel()
 
 	_, data, err := c.conn.Read(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	c.logger.Debug("received", "len", len(data), "hex", hex.EncodeToString(data[:min(len(data), 32)]))
-
-	// For response messages, the format is slightly different
-	// [cmd:1][msgId:2][status:2]
-	if len(data) >= 5 && data[0] == protocol.CmdResponse {
-		return &protocol.Message{
-			Command:   data[0],
-			MessageID: binary.BigEndian.Uint16(data[1:3]),
-			Body:      data[3:5], // Status code is in the "length" position
-		}, nil
+	msg, err := protocol.ParseMessage(data)
+	if err != nil {
+		return nil, data, err
 	}
 
-	return protocol.ParseMessage(data)
+	c.logger.Debug("received", "cmd", protocol.CommandName(msg.Command), "msgID", msg.MessageID, "len", msg.Length)
+	return msg, data, nil
 }
 
 func (c *Client) login(ctx context.Context) error {
 	msgID := c.nextMsgID()
-	msg := protocol.NewLoginMessage(
-		msgID,
-		c.credentials.Email,
-		c.credentials.PasswordHash,
-		c.credentials.ClientType,
-		c.credentials.BuildNumber,
-		c.credentials.Platform,
-	)
+	params := c.credentials.LoginParams()
+	msg := protocol.FormatMessage(protocol.CmdLogin, msgID, params...)
 
-	if err := c.sendMessage(ctx, msg); err != nil {
+	c.logger.Debug("login", "params", params[0]) // Log email only
+
+	if err := c.sendBinary(ctx, msg); err != nil {
 		return fmt.Errorf("send login: %w", err)
 	}
 
-	resp, err := c.receiveMessage(ctx)
+	resp, _, err := c.receiveBinary(ctx)
 	if err != nil {
 		return fmt.Errorf("receive login response: %w", err)
 	}
 
-	c.logger.Debug("login response", "cmd", resp.Command, "msgId", resp.MessageID, "body", hex.EncodeToString(resp.Body))
-
-	// Check for success (status 200)
-	if resp.Command != protocol.CmdResponse {
-		return fmt.Errorf("unexpected response command: %d", resp.Command)
+	if !resp.IsOK() {
+		return fmt.Errorf("login failed: status=%d", resp.Status())
 	}
 
-	status := binary.BigEndian.Uint16(resp.Body)
-	if status != 200 {
-		return fmt.Errorf("login failed with status: %d", status)
-	}
-
-	c.logger.Info("login successful")
+	c.logger.Debug("login successful")
 	return nil
 }
 
 func (c *Client) loadProfile(ctx context.Context) error {
 	msgID := c.nextMsgID()
-	msg := protocol.NewLoadProfileMessage(msgID)
+	msg := protocol.FormatMessage(protocol.CmdLoadProfile, msgID)
 
-	if err := c.sendMessage(ctx, msg); err != nil {
+	if err := c.sendBinary(ctx, msg); err != nil {
 		return fmt.Errorf("send load profile: %w", err)
 	}
 
-	resp, err := c.receiveMessage(ctx)
+	resp, data, err := c.receiveBinary(ctx)
 	if err != nil {
 		return fmt.Errorf("receive profile: %w", err)
 	}
 
-	// Profile data is GZIP compressed JSON in the body
-	profile, err := c.parseProfile(resp.Body)
+	// Profile response has the JSON in the body
+	var profileData []byte
+	if resp.Command == protocol.CmdLoadProfile && len(resp.Body) > 0 {
+		profileData = resp.Body
+	} else if len(data) > protocol.HeaderSize {
+		profileData = data[protocol.HeaderSize:]
+	}
+
+	profile, err := c.parseProfile(profileData)
 	if err != nil {
 		return fmt.Errorf("parse profile: %w", err)
 	}
@@ -302,13 +289,13 @@ func (c *Client) loadProfile(ctx context.Context) error {
 }
 
 func (c *Client) parseProfile(data []byte) (*Profile, error) {
-	// Try to find JSON start - may have protocol prefix
+	// Try to find JSON start - may have protocol prefix or be gzipped
 	jsonStart := bytes.IndexByte(data, '{')
 	if jsonStart == -1 {
 		// Try GZIP decompression
 		reader, err := gzip.NewReader(bytes.NewReader(data))
 		if err != nil {
-			return nil, fmt.Errorf("gzip reader: %w", err)
+			return nil, fmt.Errorf("gzip reader: %w (data starts with: %x)", err, data[:min(len(data), 10)])
 		}
 		defer reader.Close()
 
@@ -317,7 +304,10 @@ func (c *Client) parseProfile(data []byte) (*Profile, error) {
 			return nil, fmt.Errorf("gzip read: %w", err)
 		}
 		data = decompressed
-	} else {
+		jsonStart = bytes.IndexByte(data, '{')
+	}
+
+	if jsonStart >= 0 {
 		data = data[jsonStart:]
 	}
 
@@ -386,45 +376,41 @@ func (c *Client) Listen(ctx context.Context) error {
 		default:
 		}
 
-		msg, err := c.receiveMessage(ctx)
+		msg, _, err := c.receiveBinary(ctx)
 		if err != nil {
 			return fmt.Errorf("receive: %w", err)
 		}
 
-		c.handleMessage(ctx, msg)
+		c.handleMessage(msg)
 	}
 }
 
-func (c *Client) handleMessage(ctx context.Context, msg *protocol.Message) {
+func (c *Client) handleMessage(msg *protocol.Message) {
 	switch msg.Command {
 	case protocol.CmdHardware:
 		c.handleHardware(msg)
 	case protocol.CmdPing:
-		// Respond to ping with pong
-		pong := &protocol.Message{
-			Command:   protocol.CmdPing, // Pong uses same command
-			MessageID: msg.MessageID,
-		}
-		c.sendMessage(ctx, pong)
+		// Send pong response
+		pong := protocol.FormatResponse(msg.MessageID, protocol.StatusOK)
+		c.sendBinary(context.Background(), pong)
 	}
 }
 
 func (c *Client) handleHardware(msg *protocol.Message) {
-	params := msg.ParseParams()
 	// Format: [dashboardId, "vw", pin, value]
-	if len(params) < 4 {
+	if len(msg.Params) < 4 {
 		return
 	}
 
-	if params[1] != "vw" {
+	if msg.Params[1] != "vw" {
 		return
 	}
 
-	pin, err := strconv.Atoi(params[2])
+	pin, err := strconv.Atoi(msg.Params[2])
 	if err != nil {
 		return
 	}
-	value := params[3]
+	value := msg.Params[3]
 
 	c.mu.Lock()
 	// Find device by dashboard (device 0 is typical)
