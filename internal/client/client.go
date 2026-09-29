@@ -386,21 +386,79 @@ func (c *Client) applyPinValue(state *DeviceState, pin int, value string) {
 	state.LastUpdate = time.Now()
 }
 
-// Listen processes incoming messages until context is cancelled.
+// Listen processes incoming messages until the context is cancelled or the
+// connection fails.
+//
+// The server is quiet between pin updates, and a quiet ReadTimeout is not a
+// dead connection: on a read deadline the client sends a PING (the Blynk
+// keepalive the server expects from a client anyway) and keeps listening. Only
+// a read error that is not the deadline — the server closed the socket, the
+// network went away — ends the loop, and the caller reconnects.
 func (c *Client) Listen(ctx context.Context) error {
+	// No per-read deadline here: the websocket library closes the
+	// connection when a Read's context expires, so a quiet 30 s would kill
+	// the session. Reads block on the parent context; a keepalive goroutine
+	// sends the Blynk PING the server expects, and the server's own PINGs
+	// are answered in handleMessage.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	pingErr := make(chan error, 1)
+	go func() {
+		t := time.NewTicker(HeartbeatTimeout)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := c.ping(ctx); err != nil {
+					pingErr <- err
+					return
+				}
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case err := <-pingErr:
+			return fmt.Errorf("keepalive: %w", err)
 		default:
 		}
 
-		msg, _, err := c.receiveBinary(ctx)
+		_, data, err := c.conn.Read(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return fmt.Errorf("receive: %w", err)
 		}
-
+		msg, err := protocol.ParseMessage(data)
+		if err != nil {
+			c.logger.Debug("unparseable message", "error", err, "len", len(data))
+			continue
+		}
+		c.logger.Debug("received", "cmd", protocol.CommandName(msg.Command), "msgID", msg.MessageID, "len", msg.Length)
 		c.handleMessage(msg)
+	}
+}
+
+// ping sends the Blynk keepalive.
+func (c *Client) ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, HeartbeatTimeout)
+	defer cancel()
+	return c.sendBinary(ctx, protocol.FormatMessage(protocol.CmdPing, c.nextMsgID()))
+}
+
+// MarkDisconnected clears every device's status so a publisher reports it
+// offline rather than republishing the last readings as if they were live.
+func (c *Client) MarkDisconnected() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, state := range c.devices {
+		state.Status = ""
 	}
 }
 

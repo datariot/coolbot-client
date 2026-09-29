@@ -122,16 +122,42 @@ func main() {
 	})
 
 	// Initial publish
+	logDevices(cb, logger)
 	publishMetrics(cb, publisher, logger)
 
 	// Start periodic publish
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 
-	// Start listening for real-time updates
+	// Listen for real-time updates, and reconnect when the connection dies.
+	// The first version of this logged one "listen error" and carried on
+	// publishing the zero-initialised device state every interval, for
+	// months — a dead socket must be a reconnect, never a quiet fact.
 	go func() {
-		if err := cb.Listen(ctx); err != nil && ctx.Err() == nil {
-			logger.Error("listen error", "error", err)
+		backoff := 5 * time.Second
+		for {
+			err := cb.Listen(ctx)
+			if ctx.Err() != nil {
+				return
+			}
+			logger.Error("listen error; reconnecting", "error", err, "in", backoff)
+			cb.MarkDisconnected()
+			cb.Close()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			if err := cb.Connect(ctx); err != nil {
+				logger.Error("reconnect failed", "error", err)
+				if backoff < 5*time.Minute {
+					backoff *= 2
+				}
+				continue
+			}
+			backoff = 5 * time.Second
+			logDevices(cb, logger)
+			publishMetrics(cb, publisher, logger)
 		}
 	}()
 
@@ -150,9 +176,29 @@ func main() {
 	}
 }
 
+// logDevices says what the cloud reported at connect: which controllers, and
+// whether the cloud can reach them. `online=0` on the wire is this status.
+func logDevices(cb *client.Client, logger *slog.Logger) {
+	for _, dev := range cb.GetDevices() {
+		logger.Info("device", "id", dev.ID, "name", dev.Name, "status", dev.Status,
+			"firmware", dev.FirmwareVersion, "room_temp", dev.RoomTemp, "set_point", dev.SetPoint)
+	}
+}
+
 func publishMetrics(cb *client.Client, publisher *metrics.Publisher, logger *slog.Logger) {
 	devices := cb.GetDevices()
 	for _, dev := range devices {
+		online := dev.Status == "ONLINE"
+		if !online {
+			// The cloud says the controller is unreachable (or we are not
+			// connected to the cloud): say so, and say nothing else. The
+			// last-known temperatures are not readings, and a 0.00 °F room
+			// is a lie a dashboard would plot.
+			if err := publisher.PublishSingle("online", "0"); err != nil {
+				logger.Error("failed to publish online", "error", err, "device", dev.Name)
+			}
+			continue
+		}
 		m := metrics.DeviceMetrics{
 			DeviceID:        dev.ID,
 			DeviceName:      dev.Name,
@@ -162,7 +208,7 @@ func publishMetrics(cb *client.Client, publisher *metrics.Publisher, logger *slo
 			Humidity:        dev.Humidity,
 			CompressorState: dev.CompressorState,
 			RSSI:            dev.RSSI,
-			Online:          dev.Status == "ONLINE",
+			Online:          online,
 			FirmwareVersion: dev.FirmwareVersion,
 			Status:          dev.Status,
 		}
