@@ -93,35 +93,37 @@ HARDWARE @7778: [dashboardId·vw·pin·value]
 
 ## Virtual Pin Mapping
 
-| Pin | Description | Type | Range/Values |
-|-----|-------------|------|--------------|
-| v0 | Room Temperature | Float | 0-110°F |
-| v1 | Frost/Fin Temperature | Float | 0-110°F |
-| v2 | Status | String | "OK", error codes |
-| v4 | Set Point Temperature | Float | 36-45°F |
-| v6 | Mode | Integer | Cooling modes |
-| v7 | Cycle Time | String | "30 sec", etc. |
-| v8 | Enable | Boolean | 1/0 |
-| v9 | Compressor State | Integer | 0/1 |
-| v10 | Humidity | Float | % |
-| v12 | Max Set Point | Float | 42-45°F |
-| v13 | Heat Mode | Boolean | 1/0 |
-| v14 | RSSI (Device 0) | Integer | -100 to 0 dBm |
-| v16 | Frost Minimum | Float | Alarm threshold |
-| v17 | Frost Alarm | Boolean | 1/0 |
-| v18 | RSSI | Integer | Signal strength |
-| v19 | Compressor Run Count | Integer | Total cycles |
-| v20 | Firmware Version | String | e.g., "7.9.5" |
-| v22 | Night Mode Enable | Boolean | 1/0 |
-| v23 | Power State | Boolean | 1/0 |
-| v24 | Fan State | Boolean | 1/0 |
-| v25 | MAC Address | String | HEX format |
-| v26 | Status Flag | Boolean | 1/0 |
-| v30 | Sensor Error | Boolean | 1/0 |
-| v31 | Frost Sensor Error | Boolean | 1/0 |
-| v32 | Heater Error | Boolean | 1/0 |
-| v36 | Hardware Revision | String | e.g., "7.A" |
-| v100 | Offline Flag | Boolean | 1/0 |
+From the vendor web app's own pin table (cb.storeitcold.com `main.js`, the
+CoolBot device class's `pinAssignments`) and the app's widget labels. An
+earlier version of this table guessed; v9 and v10 were wrong (KB-1163). The
+CoolBot has **no compressor or humidity reading**: it runs the AC by warming
+the AC's temperature sensor, so v26 `heaterOn` is its call for cooling.
+
+| Pin | Vendor name | Meaning | Example |
+|-----|-------------|---------|---------|
+| v0 | roomTemp | Room temperature (°F) | `55.652` |
+| v1 | finsTemp | Evaporator-fin temperature (°F) | `56.390` |
+| v2 | status | Status word: `OK`, `Hot`, `Cold`, `Room`/`Fins`/`Heater`/`Hardware` faults | `Hot` |
+| v4 | setTemp | Set point (°F) | `41.998` |
+| v6 | finsSetTemp | Fin-temperature setting (integer) | `1` |
+| v8 | heaterDelay | Heater delay (integer) | `1` |
+| v9 | powerOn | Power switch in the app (0/1) | `1` |
+| v10 | notifyOn | Alerts enabled (0/1) | `1` |
+| v12 | tooHotTemp | Too-hot alert threshold (°F) | `45` |
+| v16 | tooColdTemp | Too-cold alert threshold (°F) | `38` |
+| v18 | (RSSI widget) | Wi-Fi signal (dBm) | `-70` |
+| v20 | firmwareVersion | Firmware version | `7.9.6` |
+| v22 | notifyEmailOn | Email alerts (0/1) | `0` |
+| v23 | notifySmsOn | SMS alerts (0/1) | `1` |
+| v25 | macAddress | MAC address | |
+| v26 | heaterOn | Heater warming the AC sensor = calling for cooling (0/1) | `1` |
+| v36 | hardwareVersion | Hardware revision | `7.A` |
+| v37 | notifyOnSetPointChange | Alert on set-point change (0/1) | |
+| v100 | offlineFlag | Offline flag (0/1) | `0` |
+
+Other pins the controller writes (v7 `30 sec`, v13, v14, v17, v19, v21, v24,
+v30–v35) have no name in the vendor table; the exporter publishes them as
+`pin_<n>`.
 
 ## Device Information Structure
 
@@ -130,7 +132,7 @@ HARDWARE @7778: [dashboardId·vw·pin·value]
   "id": 0,
   "name": "CoolBot",
   "boardType": "ESP8266",
-  "token": "cd47fa5be7f449459f1eb04abf2adba3",
+  "token": "<device token>",
   "connectionType": "WI_FI",
   "status": "ONLINE",
   "disconnectTime": 1769824786398,

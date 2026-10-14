@@ -41,16 +41,25 @@ type Client struct {
 }
 
 // DeviceState holds the current state of a CoolBot device.
+//
+// Two different things are called "status" and they must not share a field:
+// CloudStatus is the cloud's view of the connection ("ONLINE"), StatusWord
+// is the controller's own pin 2 ("OK", "Hot", …). Sharing one field let
+// every pin-2 update overwrite "ONLINE", and the publisher then reported the
+// controller offline forever (KB-1163).
 type DeviceState struct {
 	ID              int
 	Name            string
 	Token           string
-	Status          string
+	CloudStatus     string
+	StatusWord      string
 	RoomTemp        float64
 	FrostTemp       float64
 	SetPoint        float64
-	Humidity        float64
-	CompressorState int
+	TooHotTemp      float64
+	TooColdTemp     float64
+	HeaterOn        int
+	PowerOn         int
 	RSSI            int
 	FirmwareVersion string
 	LastUpdate      time.Time
@@ -341,11 +350,11 @@ func (c *Client) initDeviceStates() {
 	for _, dash := range c.profile.Dashboards {
 		for _, dev := range dash.Devices {
 			state := &DeviceState{
-				ID:         dev.ID,
-				Name:       dev.Name,
-				Token:      dev.Token,
-				Status:     dev.Status,
-				LastUpdate: time.Now(),
+				ID:          dev.ID,
+				Name:        dev.Name,
+				Token:       dev.Token,
+				CloudStatus: dev.Status,
+				LastUpdate:  time.Now(),
 			}
 
 			// Initialize from pinsStorage
@@ -368,20 +377,24 @@ func (c *Client) applyPinValue(state *DeviceState, pin int, value string) {
 	switch pin {
 	case protocol.PinRoomTemp:
 		state.RoomTemp, _ = strconv.ParseFloat(value, 64)
-	case protocol.PinFrostTemp:
+	case protocol.PinFinsTemp:
 		state.FrostTemp, _ = strconv.ParseFloat(value, 64)
 	case protocol.PinSetPoint:
 		state.SetPoint, _ = strconv.ParseFloat(value, 64)
-	case protocol.PinHumidity:
-		state.Humidity, _ = strconv.ParseFloat(value, 64)
-	case protocol.PinCompressorState:
-		state.CompressorState, _ = strconv.Atoi(value)
-	case protocol.PinRSSI, protocol.PinRSSI0:
+	case protocol.PinTooHotTemp:
+		state.TooHotTemp, _ = strconv.ParseFloat(value, 64)
+	case protocol.PinTooColdTemp:
+		state.TooColdTemp, _ = strconv.ParseFloat(value, 64)
+	case protocol.PinHeaterOn:
+		state.HeaterOn, _ = strconv.Atoi(value)
+	case protocol.PinPowerOn:
+		state.PowerOn, _ = strconv.Atoi(value)
+	case protocol.PinRSSI:
 		state.RSSI, _ = strconv.Atoi(value)
 	case protocol.PinFirmwareVersion:
 		state.FirmwareVersion = value
 	case protocol.PinStatus:
-		state.Status = value
+		state.StatusWord = value
 	}
 	state.LastUpdate = time.Now()
 }
@@ -452,13 +465,14 @@ func (c *Client) ping(ctx context.Context) error {
 	return c.sendBinary(ctx, protocol.FormatMessage(protocol.CmdPing, c.nextMsgID()))
 }
 
-// MarkDisconnected clears every device's status so a publisher reports it
-// offline rather than republishing the last readings as if they were live.
+// MarkDisconnected clears every device's cloud status so a publisher
+// reports it offline rather than republishing the last readings as if they
+// were live.
 func (c *Client) MarkDisconnected() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, state := range c.devices {
-		state.Status = ""
+		state.CloudStatus = ""
 	}
 }
 

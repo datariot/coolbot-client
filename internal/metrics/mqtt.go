@@ -83,19 +83,22 @@ func (p *Publisher) Close() {
 	p.client.Disconnect(1000)
 }
 
-// DeviceMetrics holds metrics for a single device.
+// DeviceMetrics holds metrics for a single device. The attribute names it
+// publishes under are the same ones protocol.PinName gives the real-time
+// pin updates, so a reading has one topic whichever path sent it.
 type DeviceMetrics struct {
-	DeviceID        int
-	DeviceName      string
-	RoomTemp        float64
-	FrostTemp       float64
-	SetPoint        float64
-	Humidity        float64
-	CompressorState int
-	RSSI            int
-	Online          bool
-	FirmwareVersion string
-	Status          string
+	DeviceID    int
+	DeviceName  string
+	RoomTemp    float64
+	FrostTemp   float64
+	SetPoint    float64
+	TooHotTemp  float64
+	TooColdTemp float64
+	HeaterOn    int
+	PowerOn     int
+	RSSI        int
+	Online      bool
+	StatusWord  string
 }
 
 // PublishDeviceMetrics publishes all device metrics to MQTT.
@@ -104,13 +107,19 @@ func (p *Publisher) PublishDeviceMetrics(m DeviceMetrics) error {
 	// For now, publish directly under the prefix
 
 	metrics := map[string]string{
-		"room_temp":        fmt.Sprintf("%.2f", m.RoomTemp),
-		"frost_temp":       fmt.Sprintf("%.2f", m.FrostTemp),
-		"set_point":        fmt.Sprintf("%.2f", m.SetPoint),
-		"humidity":         fmt.Sprintf("%.1f", m.Humidity),
-		"compressor_state": fmt.Sprintf("%d", m.CompressorState),
-		"rssi":             fmt.Sprintf("%d", m.RSSI),
-		"online":           boolToStr(m.Online),
+		"room_temp":     fmt.Sprintf("%.2f", m.RoomTemp),
+		"frost_temp":    fmt.Sprintf("%.2f", m.FrostTemp),
+		"set_point":     fmt.Sprintf("%.2f", m.SetPoint),
+		"too_hot_temp":  fmt.Sprintf("%.2f", m.TooHotTemp),
+		"too_cold_temp": fmt.Sprintf("%.2f", m.TooColdTemp),
+		"heater_on":     fmt.Sprintf("%d", m.HeaterOn),
+		"power_on":      fmt.Sprintf("%d", m.PowerOn),
+		"rssi":          fmt.Sprintf("%d", m.RSSI),
+		"online":        boolToStr(m.Online),
+	}
+	// An empty status word is "not received yet", not a reading.
+	if m.StatusWord != "" {
+		metrics["status"] = m.StatusWord
 	}
 
 	var lastErr error
