@@ -110,20 +110,26 @@ the AC's temperature sensor, so v26 `heaterOn` is its call for cooling.
 | v9 | powerOn | Power switch in the app (0/1) | `1` |
 | v10 | notifyOn | Alerts enabled (0/1) | `1` |
 | v12 | tooHotTemp | Too-hot alert threshold (°F) | `45` |
+| v13 | (alert rule) | Too-hot alarm raised (> 0) | `255` |
 | v16 | tooColdTemp | Too-cold alert threshold (°F) | `38` |
+| v17 | (alert rule) | Too-cold alarm raised (> 0) | `0` |
 | v18 | (RSSI widget) | Wi-Fi signal (dBm) | `-70` |
 | v20 | firmwareVersion | Firmware version | `7.9.6` |
 | v22 | notifyEmailOn | Email alerts (0/1) | `0` |
 | v23 | notifySmsOn | SMS alerts (0/1) | `1` |
 | v25 | macAddress | MAC address | |
 | v26 | heaterOn | Heater warming the AC sensor = calling for cooling (0/1) | `1` |
+| v30 | (alert rule) | Room sensor fault (> 0) | `0` |
+| v31 | (alert rule) | Fins sensor fault (> 0) | `0` |
+| v32 | (alert rule) | Heater fault (> 0) | `0` |
 | v36 | hardwareVersion | Hardware revision | `7.A` |
 | v37 | notifyOnSetPointChange | Alert on set-point change (0/1) | |
 | v100 | offlineFlag | Offline flag (0/1) | `0` |
 
-Other pins the controller writes (v7 `30 sec`, v13, v14, v17, v19, v21, v24,
-v30–v35) have no name in the vendor table; the exporter publishes them as
-`pin_<n>`.
+"(alert rule)" pins are not in `pinAssignments`; their meaning is the
+account's own SMS alert rules (the eventor widget), each "pin > 0". Other pins
+the controller writes (v7 `30 sec`, v14, v19, v21, v24, v33, v35) have no name
+in either; the exporter publishes them as `pin_<n>`.
 
 ## Device Information Structure
 

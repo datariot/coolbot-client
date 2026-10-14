@@ -201,18 +201,23 @@ func publishMetrics(cb *client.Client, publisher *metrics.Publisher, logger *slo
 			continue
 		}
 		m := metrics.DeviceMetrics{
-			DeviceID:    dev.ID,
-			DeviceName:  dev.Name,
-			RoomTemp:    dev.RoomTemp,
-			FrostTemp:   dev.FrostTemp,
-			SetPoint:    dev.SetPoint,
-			TooHotTemp:  dev.TooHotTemp,
-			TooColdTemp: dev.TooColdTemp,
-			HeaterOn:    dev.HeaterOn,
-			PowerOn:     dev.PowerOn,
-			RSSI:        dev.RSSI,
-			Online:      online,
-			StatusWord:  dev.StatusWord,
+			DeviceID:        dev.ID,
+			DeviceName:      dev.Name,
+			RoomTemp:        dev.RoomTemp,
+			FrostTemp:       dev.FrostTemp,
+			SetPoint:        dev.SetPoint,
+			TooHotTemp:      dev.TooHotTemp,
+			TooColdTemp:     dev.TooColdTemp,
+			HeaterOn:        dev.HeaterOn,
+			PowerOn:         dev.PowerOn,
+			AlarmHot:        dev.AlarmHot,
+			AlarmCold:       dev.AlarmCold,
+			RoomSensorError: dev.RoomSensorError,
+			FinsSensorError: dev.FinsSensorError,
+			HeaterError:     dev.HeaterError,
+			RSSI:            dev.RSSI,
+			Online:          online,
+			StatusWord:      dev.StatusWord,
 		}
 
 		if err := publisher.PublishDeviceMetrics(m); err != nil {

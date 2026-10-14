@@ -96,9 +96,15 @@ type DeviceMetrics struct {
 	TooColdTemp float64
 	HeaterOn    int
 	PowerOn     int
-	RSSI        int
-	Online      bool
-	StatusWord  string
+	// Alarm pins, raw (255 = raised).
+	AlarmHot        int
+	AlarmCold       int
+	RoomSensorError int
+	FinsSensorError int
+	HeaterError     int
+	RSSI            int
+	Online          bool
+	StatusWord      string
 }
 
 // PublishDeviceMetrics publishes all device metrics to MQTT.
@@ -107,15 +113,20 @@ func (p *Publisher) PublishDeviceMetrics(m DeviceMetrics) error {
 	// For now, publish directly under the prefix
 
 	metrics := map[string]string{
-		"room_temp":     fmt.Sprintf("%.2f", m.RoomTemp),
-		"frost_temp":    fmt.Sprintf("%.2f", m.FrostTemp),
-		"set_point":     fmt.Sprintf("%.2f", m.SetPoint),
-		"too_hot_temp":  fmt.Sprintf("%.2f", m.TooHotTemp),
-		"too_cold_temp": fmt.Sprintf("%.2f", m.TooColdTemp),
-		"heater_on":     fmt.Sprintf("%d", m.HeaterOn),
-		"power_on":      fmt.Sprintf("%d", m.PowerOn),
-		"rssi":          fmt.Sprintf("%d", m.RSSI),
-		"online":        boolToStr(m.Online),
+		"room_temp":         fmt.Sprintf("%.2f", m.RoomTemp),
+		"frost_temp":        fmt.Sprintf("%.2f", m.FrostTemp),
+		"set_point":         fmt.Sprintf("%.2f", m.SetPoint),
+		"too_hot_temp":      fmt.Sprintf("%.2f", m.TooHotTemp),
+		"too_cold_temp":     fmt.Sprintf("%.2f", m.TooColdTemp),
+		"heater_on":         fmt.Sprintf("%d", m.HeaterOn),
+		"power_on":          fmt.Sprintf("%d", m.PowerOn),
+		"alarm_hot":         fmt.Sprintf("%d", m.AlarmHot),
+		"alarm_cold":        fmt.Sprintf("%d", m.AlarmCold),
+		"room_sensor_error": fmt.Sprintf("%d", m.RoomSensorError),
+		"fins_sensor_error": fmt.Sprintf("%d", m.FinsSensorError),
+		"heater_error":      fmt.Sprintf("%d", m.HeaterError),
+		"rssi":              fmt.Sprintf("%d", m.RSSI),
+		"online":            boolToStr(m.Online),
 	}
 	// An empty status word is "not received yet", not a reading.
 	if m.StatusWord != "" {

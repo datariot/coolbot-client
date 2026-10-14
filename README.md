@@ -67,6 +67,11 @@ Data is published to `farm/sensors/coolbot/<attribute>` with plain float values:
 | `farm/sensors/coolbot/status` | Controller status word (`OK`, `Hot`, `Cold`, faults) | `OK` |
 | `farm/sensors/coolbot/too_hot_temp` | Too-hot alert threshold (°F) | `45.00` |
 | `farm/sensors/coolbot/too_cold_temp` | Too-cold alert threshold (°F) | `38.00` |
+| `farm/sensors/coolbot/alarm_hot` | Too-hot alarm (> 0 = raised; the controller sends 255) | `255` |
+| `farm/sensors/coolbot/alarm_cold` | Too-cold alarm (> 0 = raised) | `0` |
+| `farm/sensors/coolbot/room_sensor_error` | Room sensor fault (> 0 = raised) | `0` |
+| `farm/sensors/coolbot/fins_sensor_error` | Fins sensor fault (> 0 = raised) | `0` |
+| `farm/sensors/coolbot/heater_error` | Heater fault (> 0 = raised) | `0` |
 | `farm/sensors/coolbot/rssi` | WiFi signal strength (dBm) | `-71` |
 | `farm/sensors/coolbot/online` | Cloud reports the controller connected | `1` |
 

@@ -48,18 +48,25 @@ type Client struct {
 // every pin-2 update overwrite "ONLINE", and the publisher then reported the
 // controller offline forever (KB-1163).
 type DeviceState struct {
-	ID              int
-	Name            string
-	Token           string
-	CloudStatus     string
-	StatusWord      string
-	RoomTemp        float64
-	FrostTemp       float64
-	SetPoint        float64
-	TooHotTemp      float64
-	TooColdTemp     float64
-	HeaterOn        int
-	PowerOn         int
+	ID          int
+	Name        string
+	Token       string
+	CloudStatus string
+	StatusWord  string
+	RoomTemp    float64
+	FrostTemp   float64
+	SetPoint    float64
+	TooHotTemp  float64
+	TooColdTemp float64
+	HeaterOn    int
+	PowerOn     int
+	// The alarm pins, raw: the controller writes 255 for raised. Consumers
+	// treat > 0 as raised, as the vendor's alert rules do.
+	AlarmHot        int
+	AlarmCold       int
+	RoomSensorError int
+	FinsSensorError int
+	HeaterError     int
 	RSSI            int
 	FirmwareVersion string
 	LastUpdate      time.Time
@@ -389,6 +396,16 @@ func (c *Client) applyPinValue(state *DeviceState, pin int, value string) {
 		state.HeaterOn, _ = strconv.Atoi(value)
 	case protocol.PinPowerOn:
 		state.PowerOn, _ = strconv.Atoi(value)
+	case protocol.PinAlarmHot:
+		state.AlarmHot, _ = strconv.Atoi(value)
+	case protocol.PinAlarmCold:
+		state.AlarmCold, _ = strconv.Atoi(value)
+	case protocol.PinRoomSensorError:
+		state.RoomSensorError, _ = strconv.Atoi(value)
+	case protocol.PinFinsSensorError:
+		state.FinsSensorError, _ = strconv.Atoi(value)
+	case protocol.PinHeaterError:
+		state.HeaterError, _ = strconv.Atoi(value)
 	case protocol.PinRSSI:
 		state.RSSI, _ = strconv.Atoi(value)
 	case protocol.PinFirmwareVersion:
