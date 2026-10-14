@@ -13,6 +13,7 @@ import (
 
 	"github.com/datariot/coolbot-client/internal/client"
 	"github.com/datariot/coolbot-client/internal/metrics"
+	"github.com/datariot/coolbot-client/internal/protocol"
 )
 
 func main() {
@@ -186,42 +187,43 @@ func logDevices(cb *client.Client, logger *slog.Logger) {
 	}
 }
 
+// periodicPins are the pins republished every interval, so a dashboard's
+// "last hour" window always has a value even when nothing changed.
+var periodicPins = []int{
+	protocol.PinRoomTemp, protocol.PinFinsTemp, protocol.PinStatus, protocol.PinSetPoint,
+	protocol.PinTooHotTemp, protocol.PinTooColdTemp, protocol.PinHeaterOn, protocol.PinPowerOn,
+	protocol.PinAlarmHot, protocol.PinAlarmCold, protocol.PinRoomSensorError,
+	protocol.PinFinsSensorError, protocol.PinHeaterError, protocol.PinRSSI,
+}
+
 func publishMetrics(cb *client.Client, publisher *metrics.Publisher, logger *slog.Logger) {
-	devices := cb.GetDevices()
-	for _, dev := range devices {
-		online := dev.CloudStatus == "ONLINE"
-		if !online {
+	for _, dev := range cb.GetDevices() {
+		readings := periodicReadings(dev)
+		if readings["online"] == "0" {
 			// The cloud says the controller is unreachable (or we are not
 			// connected to the cloud): say so, and say nothing else. The
-			// last-known temperatures are not readings, and a 0.00 °F room
-			// is a lie a dashboard would plot.
-			if err := publisher.PublishSingle("online", "0"); err != nil {
-				logger.Error("failed to publish online", "error", err, "device", dev.Name)
-			}
-			continue
+			// last-known values are not readings.
+			readings = map[string]string{"online": "0"}
 		}
-		m := metrics.DeviceMetrics{
-			DeviceID:        dev.ID,
-			DeviceName:      dev.Name,
-			RoomTemp:        dev.RoomTemp,
-			FrostTemp:       dev.FrostTemp,
-			SetPoint:        dev.SetPoint,
-			TooHotTemp:      dev.TooHotTemp,
-			TooColdTemp:     dev.TooColdTemp,
-			HeaterOn:        dev.HeaterOn,
-			PowerOn:         dev.PowerOn,
-			AlarmHot:        dev.AlarmHot,
-			AlarmCold:       dev.AlarmCold,
-			RoomSensorError: dev.RoomSensorError,
-			FinsSensorError: dev.FinsSensorError,
-			HeaterError:     dev.HeaterError,
-			RSSI:            dev.RSSI,
-			Online:          online,
-			StatusWord:      dev.StatusWord,
-		}
-
-		if err := publisher.PublishDeviceMetrics(m); err != nil {
+		if err := publisher.PublishReadings(readings); err != nil {
 			logger.Error("failed to publish metrics", "error", err, "device", dev.Name)
 		}
 	}
+}
+
+// periodicReadings is what one interval publishes for a device: online, and
+// every periodic pin that has actually been received since connect. A pin not
+// yet heard from is left out rather than sent as zero (KB-1163).
+func periodicReadings(dev client.DeviceState) map[string]string {
+	online := "0"
+	if dev.CloudStatus == "ONLINE" {
+		online = "1"
+	}
+	readings := map[string]string{"online": online}
+	for _, pin := range periodicPins {
+		if v, ok := dev.Pins[pin]; ok && v != "" {
+			readings[protocol.PinName(pin)] = v
+		}
+	}
+	return readings
 }
