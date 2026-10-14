@@ -83,58 +83,11 @@ func (p *Publisher) Close() {
 	p.client.Disconnect(1000)
 }
 
-// DeviceMetrics holds metrics for a single device. The attribute names it
-// publishes under are the same ones protocol.PinName gives the real-time
-// pin updates, so a reading has one topic whichever path sent it.
-type DeviceMetrics struct {
-	DeviceID    int
-	DeviceName  string
-	RoomTemp    float64
-	FrostTemp   float64
-	SetPoint    float64
-	TooHotTemp  float64
-	TooColdTemp float64
-	HeaterOn    int
-	PowerOn     int
-	// Alarm pins, raw (255 = raised).
-	AlarmHot        int
-	AlarmCold       int
-	RoomSensorError int
-	FinsSensorError int
-	HeaterError     int
-	RSSI            int
-	Online          bool
-	StatusWord      string
-}
-
-// PublishDeviceMetrics publishes all device metrics to MQTT.
-func (p *Publisher) PublishDeviceMetrics(m DeviceMetrics) error {
-	// Build topic suffix from device name if we have multiple devices
-	// For now, publish directly under the prefix
-
-	metrics := map[string]string{
-		"room_temp":         fmt.Sprintf("%.2f", m.RoomTemp),
-		"frost_temp":        fmt.Sprintf("%.2f", m.FrostTemp),
-		"set_point":         fmt.Sprintf("%.2f", m.SetPoint),
-		"too_hot_temp":      fmt.Sprintf("%.2f", m.TooHotTemp),
-		"too_cold_temp":     fmt.Sprintf("%.2f", m.TooColdTemp),
-		"heater_on":         fmt.Sprintf("%d", m.HeaterOn),
-		"power_on":          fmt.Sprintf("%d", m.PowerOn),
-		"alarm_hot":         fmt.Sprintf("%d", m.AlarmHot),
-		"alarm_cold":        fmt.Sprintf("%d", m.AlarmCold),
-		"room_sensor_error": fmt.Sprintf("%d", m.RoomSensorError),
-		"fins_sensor_error": fmt.Sprintf("%d", m.FinsSensorError),
-		"heater_error":      fmt.Sprintf("%d", m.HeaterError),
-		"rssi":              fmt.Sprintf("%d", m.RSSI),
-		"online":            boolToStr(m.Online),
-	}
-	// An empty status word is "not received yet", not a reading.
-	if m.StatusWord != "" {
-		metrics["status"] = m.StatusWord
-	}
-
+// PublishReadings publishes each attribute → value under the prefix. The
+// caller decides what is a reading; this only sends.
+func (p *Publisher) PublishReadings(readings map[string]string) error {
 	var lastErr error
-	for attr, value := range metrics {
+	for attr, value := range readings {
 		topic := fmt.Sprintf("%s/%s", p.prefix, attr)
 		token := p.client.Publish(topic, p.qos, p.retain, value)
 		if token.Wait() && token.Error() != nil {
@@ -144,7 +97,6 @@ func (p *Publisher) PublishDeviceMetrics(m DeviceMetrics) error {
 			p.logger.Debug("published", "topic", topic, "value", value)
 		}
 	}
-
 	return lastErr
 }
 
@@ -156,13 +108,6 @@ func (p *Publisher) PublishSingle(attribute string, value string) error {
 		return token.Error()
 	}
 	return nil
-}
-
-func boolToStr(b bool) string {
-	if b {
-		return "1"
-	}
-	return "0"
 }
 
 // IsConnected returns true if connected to the broker.

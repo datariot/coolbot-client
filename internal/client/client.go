@@ -69,7 +69,24 @@ type DeviceState struct {
 	HeaterError     int
 	RSSI            int
 	FirmwareVersion string
-	LastUpdate      time.Time
+	// Pins holds the raw value of every pin received since connect, by pin
+	// number. A pin absent here has not been heard from: the profile's pin
+	// storage omits the live readings (room, fins, status), so at connect
+	// the typed fields above read zero for them, and publishing that zero
+	// would put a 0 °F room on the dashboard (KB-1163).
+	Pins       map[int]string
+	LastUpdate time.Time
+}
+
+// copy returns the state with its own Pins map, so a caller reading it
+// outside the lock does not race the listener writing the original.
+func (d *DeviceState) copy() DeviceState {
+	out := *d
+	out.Pins = make(map[int]string, len(d.Pins))
+	for pin, v := range d.Pins {
+		out.Pins[pin] = v
+	}
+	return out
 }
 
 // DeviceUpdate is sent when device state changes.
@@ -381,6 +398,10 @@ func (c *Client) initDeviceStates() {
 }
 
 func (c *Client) applyPinValue(state *DeviceState, pin int, value string) {
+	if state.Pins == nil {
+		state.Pins = make(map[int]string)
+	}
+	state.Pins[pin] = value
 	switch pin {
 	case protocol.PinRoomTemp:
 		state.RoomTemp, _ = strconv.ParseFloat(value, 64)
@@ -549,7 +570,7 @@ func (c *Client) GetDevices() []DeviceState {
 
 	devices := make([]DeviceState, 0, len(c.devices))
 	for _, d := range c.devices {
-		devices = append(devices, *d)
+		devices = append(devices, d.copy())
 	}
 	return devices
 }
@@ -560,7 +581,7 @@ func (c *Client) GetDevice(id int) (DeviceState, bool) {
 	defer c.mu.RUnlock()
 
 	if d, ok := c.devices[id]; ok {
-		return *d, true
+		return d.copy(), true
 	}
 	return DeviceState{}, false
 }
