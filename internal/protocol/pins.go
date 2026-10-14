@@ -1,98 +1,83 @@
 package protocol
 
+import "strconv"
+
 // Virtual pin definitions for CoolBot Pro devices.
+//
+// The meanings come from the vendor web app's own pin table
+// (cb.storeitcold.com, the CoolBot device class's pinAssignments), and the
+// values a live controller holds confirm the ones with an obvious shape
+// (firmware, MAC, hardware revision). The first version of this file
+// guessed, and named the power switch "compressor_state" and the alerts
+// flag "humidity" (KB-1163). The CoolBot has no compressor or humidity
+// reading: it runs the air conditioner by warming the AC's own temperature
+// sensor, so PinHeaterOn is its call for cooling.
+//
+// The alarm pins (13, 17, 30, 31, 32) are not in pinAssignments; their
+// meaning comes from the account's own alert rules (the eventor widget that
+// sends the SMS), each "pin > 0". The controller writes 255 for raised.
+//
+// A pin neither source names is published as pin_<n> rather than under a
+// guessed name.
 const (
-	PinRoomTemp          = 0  // Room temperature (°F)
-	PinFrostTemp         = 1  // Frost/fin temperature (°F)
-	PinStatus            = 2  // Status string ("OK", error codes)
-	PinSetPoint          = 4  // Set point temperature (°F)
-	PinMode              = 6  // Cooling mode
-	PinCycleTime         = 7  // Cycle time string
-	PinEnable            = 8  // Enable flag
-	PinCompressorState   = 9  // Compressor state
-	PinHumidity          = 10 // Humidity (%)
-	PinMaxSetPoint       = 12 // Max set point (°F)
-	PinHeatMode          = 13 // Heat mode flag
-	PinRSSI0             = 14 // RSSI for device 0
-	PinFrostMinimum      = 16 // Frost minimum alarm threshold
-	PinFrostAlarm        = 17 // Frost alarm flag
-	PinRSSI              = 18 // RSSI signal strength
-	PinCompressorCount   = 19 // Compressor run count
-	PinFirmwareVersion   = 20 // Firmware version string
-	PinNightModeEnable   = 22 // Night mode enable flag
-	PinPowerState        = 23 // Power state
-	PinFanState          = 24 // Fan state
-	PinMACAddress        = 25 // MAC address (hex)
-	PinStatusFlag        = 26 // Status flag
-	PinSensorError       = 30 // Sensor error flag
-	PinFrostSensorError  = 31 // Frost sensor error flag
-	PinHeaterError       = 32 // Heater error flag
-	PinHardwareRevision  = 36 // Hardware revision string
-	PinOfflineFlag       = 100 // Offline notification flag
+	PinRoomTemp         = 0   // roomTemp: room temperature (°F)
+	PinFinsTemp         = 1   // finsTemp: evaporator-fin temperature (°F)
+	PinStatus           = 2   // status: "OK", "Hot", "Cold", "Room"/"Fins"/"Heater"/"Hardware" faults, …
+	PinSetPoint         = 4   // setTemp: set point (°F)
+	PinFinsSetTemp      = 6   // finsSetTemp: fin-temperature setting (integer)
+	PinHeaterDelay      = 8   // heaterDelay (integer)
+	PinPowerOn          = 9   // powerOn: the app's power switch (0/1)
+	PinNotifyOn         = 10  // notifyOn: alerts enabled (0/1)
+	PinTooHotTemp       = 12  // tooHotTemp: too-hot alert threshold (°F)
+	PinAlarmHot         = 13  // too-hot alarm raised (> 0)
+	PinTooColdTemp      = 16  // tooColdTemp: too-cold alert threshold (°F)
+	PinAlarmCold        = 17  // too-cold alarm raised (> 0)
+	PinRSSI             = 18  // RSSI (dBm), the app's "RSSI" widget
+	PinFirmwareVersion  = 20  // firmware version string
+	PinNotifyEmailOn    = 22  // notifyEmailOn (0/1)
+	PinNotifySmsOn      = 23  // notifySmsOn (0/1)
+	PinMACAddress       = 25  // MAC address
+	PinHeaterOn         = 26  // heaterOn: warming the AC's sensor = calling for cooling (0/1)
+	PinRoomSensorError  = 30  // room sensor fault (> 0)
+	PinFinsSensorError  = 31  // fins sensor fault (> 0)
+	PinHeaterError      = 32  // heater fault (> 0)
+	PinHardwareRevision = 36  // hardware revision string
+	PinNotifyOnSetPoint = 37  // notifyOnSetPointChange (0/1)
+	PinOfflineFlag      = 100 // offlineFlag (0/1)
 )
 
-// PinName returns a human-readable name for a virtual pin.
-func PinName(pin int) string {
-	names := map[int]string{
-		PinRoomTemp:         "room_temp",
-		PinFrostTemp:        "frost_temp",
-		PinStatus:           "status",
-		PinSetPoint:         "set_point",
-		PinMode:             "mode",
-		PinCycleTime:        "cycle_time",
-		PinEnable:           "enable",
-		PinCompressorState:  "compressor_state",
-		PinHumidity:         "humidity",
-		PinMaxSetPoint:      "max_set_point",
-		PinHeatMode:         "heat_mode",
-		PinRSSI0:            "rssi_device0",
-		PinFrostMinimum:     "frost_minimum",
-		PinFrostAlarm:       "frost_alarm",
-		PinRSSI:             "rssi",
-		PinCompressorCount:  "compressor_count",
-		PinFirmwareVersion:  "firmware_version",
-		PinNightModeEnable:  "night_mode",
-		PinPowerState:       "power_state",
-		PinFanState:         "fan_state",
-		PinMACAddress:       "mac_address",
-		PinStatusFlag:       "status_flag",
-		PinSensorError:      "sensor_error",
-		PinFrostSensorError: "frost_sensor_error",
-		PinHeaterError:      "heater_error",
-		PinHardwareRevision: "hardware_revision",
-		PinOfflineFlag:      "offline",
-	}
-	if name, ok := names[pin]; ok {
-		return name
-	}
-	return "unknown"
+var pinNames = map[int]string{
+	PinRoomTemp:         "room_temp",
+	PinFinsTemp:         "frost_temp",
+	PinStatus:           "status",
+	PinSetPoint:         "set_point",
+	PinFinsSetTemp:      "fins_set_temp",
+	PinHeaterDelay:      "heater_delay",
+	PinPowerOn:          "power_on",
+	PinNotifyOn:         "notify_on",
+	PinTooHotTemp:       "too_hot_temp",
+	PinTooColdTemp:      "too_cold_temp",
+	PinAlarmHot:         "alarm_hot",
+	PinAlarmCold:        "alarm_cold",
+	PinRoomSensorError:  "room_sensor_error",
+	PinFinsSensorError:  "fins_sensor_error",
+	PinHeaterError:      "heater_error",
+	PinRSSI:             "rssi",
+	PinFirmwareVersion:  "firmware_version",
+	PinNotifyEmailOn:    "notify_email_on",
+	PinNotifySmsOn:      "notify_sms_on",
+	PinMACAddress:       "mac_address",
+	PinHeaterOn:         "heater_on",
+	PinHardwareRevision: "hardware_revision",
+	PinNotifyOnSetPoint: "notify_on_set_point_change",
+	PinOfflineFlag:      "offline_flag",
 }
 
-// IsNumericPin returns true if the pin typically holds numeric values.
-func IsNumericPin(pin int) bool {
-	numeric := map[int]bool{
-		PinRoomTemp:        true,
-		PinFrostTemp:       true,
-		PinSetPoint:        true,
-		PinMode:            true,
-		PinEnable:          true,
-		PinCompressorState: true,
-		PinHumidity:        true,
-		PinMaxSetPoint:     true,
-		PinHeatMode:        true,
-		PinRSSI0:           true,
-		PinFrostMinimum:    true,
-		PinFrostAlarm:      true,
-		PinRSSI:            true,
-		PinCompressorCount: true,
-		PinNightModeEnable: true,
-		PinPowerState:      true,
-		PinFanState:        true,
-		PinStatusFlag:      true,
-		PinSensorError:     true,
-		PinFrostSensorError: true,
-		PinHeaterError:     true,
-		PinOfflineFlag:     true,
+// PinName returns the attribute name a virtual pin is published under:
+// the vendor's meaning where it has one, pin_<n> where it does not.
+func PinName(pin int) string {
+	if name, ok := pinNames[pin]; ok {
+		return name
 	}
-	return numeric[pin]
+	return "pin_" + strconv.Itoa(pin)
 }

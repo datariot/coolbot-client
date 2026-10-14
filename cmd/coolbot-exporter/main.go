@@ -180,15 +180,16 @@ func main() {
 // whether the cloud can reach them. `online=0` on the wire is this status.
 func logDevices(cb *client.Client, logger *slog.Logger) {
 	for _, dev := range cb.GetDevices() {
-		logger.Info("device", "id", dev.ID, "name", dev.Name, "status", dev.Status,
-			"firmware", dev.FirmwareVersion, "room_temp", dev.RoomTemp, "set_point", dev.SetPoint)
+		logger.Info("device", "id", dev.ID, "name", dev.Name, "cloud_status", dev.CloudStatus,
+			"status", dev.StatusWord, "firmware", dev.FirmwareVersion,
+			"room_temp", dev.RoomTemp, "set_point", dev.SetPoint, "heater_on", dev.HeaterOn)
 	}
 }
 
 func publishMetrics(cb *client.Client, publisher *metrics.Publisher, logger *slog.Logger) {
 	devices := cb.GetDevices()
 	for _, dev := range devices {
-		online := dev.Status == "ONLINE"
+		online := dev.CloudStatus == "ONLINE"
 		if !online {
 			// The cloud says the controller is unreachable (or we are not
 			// connected to the cloud): say so, and say nothing else. The
@@ -205,12 +206,18 @@ func publishMetrics(cb *client.Client, publisher *metrics.Publisher, logger *slo
 			RoomTemp:        dev.RoomTemp,
 			FrostTemp:       dev.FrostTemp,
 			SetPoint:        dev.SetPoint,
-			Humidity:        dev.Humidity,
-			CompressorState: dev.CompressorState,
+			TooHotTemp:      dev.TooHotTemp,
+			TooColdTemp:     dev.TooColdTemp,
+			HeaterOn:        dev.HeaterOn,
+			PowerOn:         dev.PowerOn,
+			AlarmHot:        dev.AlarmHot,
+			AlarmCold:       dev.AlarmCold,
+			RoomSensorError: dev.RoomSensorError,
+			FinsSensorError: dev.FinsSensorError,
+			HeaterError:     dev.HeaterError,
 			RSSI:            dev.RSSI,
 			Online:          online,
-			FirmwareVersion: dev.FirmwareVersion,
-			Status:          dev.Status,
+			StatusWord:      dev.StatusWord,
 		}
 
 		if err := publisher.PublishDeviceMetrics(m); err != nil {

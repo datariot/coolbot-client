@@ -60,12 +60,25 @@ Data is published to `farm/sensors/coolbot/<attribute>` with plain float values:
 | Topic | Description | Example |
 |-------|-------------|---------|
 | `farm/sensors/coolbot/room_temp` | Room temperature (°F) | `41.50` |
-| `farm/sensors/coolbot/frost_temp` | Frost/fin temperature (°F) | `39.20` |
+| `farm/sensors/coolbot/frost_temp` | Evaporator-fin temperature (°F) | `39.20` |
 | `farm/sensors/coolbot/set_point` | Target set point (°F) | `42.00` |
-| `farm/sensors/coolbot/humidity` | Humidity percentage | `65.0` |
-| `farm/sensors/coolbot/compressor_state` | Compressor on/off | `1` |
+| `farm/sensors/coolbot/heater_on` | Calling for cooling: heater warming the AC's sensor | `1` |
+| `farm/sensors/coolbot/power_on` | Power switch in the app | `1` |
+| `farm/sensors/coolbot/status` | Controller status word (`OK`, `Hot`, `Cold`, faults) | `OK` |
+| `farm/sensors/coolbot/too_hot_temp` | Too-hot alert threshold (°F) | `45.00` |
+| `farm/sensors/coolbot/too_cold_temp` | Too-cold alert threshold (°F) | `38.00` |
+| `farm/sensors/coolbot/alarm_hot` | Too-hot alarm (> 0 = raised; the controller sends 255) | `255` |
+| `farm/sensors/coolbot/alarm_cold` | Too-cold alarm (> 0 = raised) | `0` |
+| `farm/sensors/coolbot/room_sensor_error` | Room sensor fault (> 0 = raised) | `0` |
+| `farm/sensors/coolbot/fins_sensor_error` | Fins sensor fault (> 0 = raised) | `0` |
+| `farm/sensors/coolbot/heater_error` | Heater fault (> 0 = raised) | `0` |
 | `farm/sensors/coolbot/rssi` | WiFi signal strength (dBm) | `-71` |
-| `farm/sensors/coolbot/online` | Device online status | `1` |
+| `farm/sensors/coolbot/online` | Cloud reports the controller connected | `1` |
+
+Real-time pin changes also publish under the names in
+[docs/PROTOCOL.md](docs/PROTOCOL.md#virtual-pin-mapping); a pin the vendor
+table does not name goes out as `pin_<n>`. There is no compressor or humidity
+topic: the CoolBot has neither reading.
 
 ## Telegraf Configuration
 
